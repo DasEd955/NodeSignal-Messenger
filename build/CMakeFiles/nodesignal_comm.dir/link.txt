@@ -1,0 +1,2 @@
+/usr/bin/ar qc libnodesignal_comm.a CMakeFiles/nodesignal_comm.dir/comm/comm.c.o
+/usr/bin/ranlib libnodesignal_comm.a

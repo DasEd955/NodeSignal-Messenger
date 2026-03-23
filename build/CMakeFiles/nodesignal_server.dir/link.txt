@@ -1,0 +1,1 @@
+/usr/bin/gcc CMakeFiles/nodesignal_server.dir/server/server.c.o -o nodesignal_server  libnodesignal_comm.a libnodesignal_db.a libnodesignal_comm.a /usr/lib/x86_64-linux-gnu/libsqlite3.so 

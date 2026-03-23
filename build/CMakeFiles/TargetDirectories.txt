@@ -1,0 +1,6 @@
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/nodesignal_comm.dir
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/nodesignal_db.dir
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/nodesignal_server.dir
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/nodesignal_client.dir
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/edit_cache.dir
+/home/tunerdesign/nodesignal_repo/build/CMakeFiles/rebuild_cache.dir

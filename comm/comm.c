@@ -1,0 +1,354 @@
+#include "comm.h"
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#endif
+
+#define NS_PACKET_HEADER_SIZE 16U
+
+static void ns_store_u32(unsigned char *buffer, uint32_t value) {
+    uint32_t network_value = htonl(value);
+    memcpy(buffer, &network_value, sizeof(network_value));
+}
+
+static uint32_t ns_load_u32(const unsigned char *buffer) {
+    uint32_t network_value = 0;
+    memcpy(&network_value, buffer, sizeof(network_value));
+    return ntohl(network_value);
+}
+
+static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_t buffer_size) {
+    size_t total_sent = 0;
+
+    while (total_sent < buffer_size) {
+#ifdef _WIN32
+        int sent_now = send(socket_fd,
+                            (const char *) buffer + total_sent,
+                            (int) (buffer_size - total_sent),
+                            0);
+#else
+        ssize_t sent_now = send(socket_fd, buffer + total_sent, buffer_size - total_sent, 0);
+#endif
+        if (sent_now <= 0) {
+            return -1;
+        }
+        total_sent += (size_t) sent_now;
+    }
+
+    return 0;
+}
+
+static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buffer_size) {
+    size_t total_received = 0;
+
+    while (total_received < buffer_size) {
+#ifdef _WIN32
+        int received_now = recv(socket_fd,
+                                (char *) buffer + total_received,
+                                (int) (buffer_size - total_received),
+                                0);
+#else
+        ssize_t received_now = recv(socket_fd, buffer + total_received, buffer_size - total_received, 0);
+#endif
+        if (received_now == 0) {
+            return total_received == 0 ? 0 : -1;
+        }
+        if (received_now < 0) {
+            return -1;
+        }
+        total_received += (size_t) received_now;
+    }
+
+    return 1;
+}
+
+int ns_net_init(void) {
+#ifdef _WIN32
+    WSADATA data;
+    return WSAStartup(MAKEWORD(2, 2), &data);
+#else
+    return 0;
+#endif
+}
+
+void ns_net_cleanup(void) {
+#ifdef _WIN32
+    WSACleanup();
+#endif
+}
+
+void ns_socket_close(ns_socket_t socket_fd) {
+    if (!ns_socket_is_valid(socket_fd)) {
+        return;
+    }
+
+#ifdef _WIN32
+    closesocket(socket_fd);
+#else
+    close(socket_fd);
+#endif
+}
+
+int ns_socket_shutdown(ns_socket_t socket_fd) {
+    if (!ns_socket_is_valid(socket_fd)) {
+        return 0;
+    }
+
+#ifdef _WIN32
+    return shutdown(socket_fd, SD_BOTH);
+#else
+    return shutdown(socket_fd, SHUT_RDWR);
+#endif
+}
+
+int ns_socket_is_valid(ns_socket_t socket_fd) {
+    return socket_fd != NS_INVALID_SOCKET;
+}
+
+uint32_t ns_unix_time_now(void) {
+    time_t now = time(NULL);
+    if (now < 0) {
+        return 0U;
+    }
+    return (uint32_t) now;
+}
+
+const char *ns_last_error_string(char *buffer, size_t buffer_size) {
+    if (buffer == NULL || buffer_size == 0) {
+        return "";
+    }
+
+#ifdef _WIN32
+    DWORD error_code = WSAGetLastError();
+    DWORD copied = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                                  NULL,
+                                  error_code,
+                                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                                  buffer,
+                                  (DWORD) buffer_size,
+                                  NULL);
+    if (copied == 0) {
+        snprintf(buffer, buffer_size, "winsock error %lu", (unsigned long) error_code);
+    }
+#else
+    snprintf(buffer, buffer_size, "%s", strerror(errno));
+#endif
+
+    return buffer;
+}
+
+ns_socket_t ns_connect_tcp(const char *host,
+                           const char *port,
+                           char *error_buffer,
+                           size_t error_buffer_size) {
+    struct addrinfo hints;
+    struct addrinfo *results = NULL;
+    struct addrinfo *candidate = NULL;
+    ns_socket_t socket_fd = NS_INVALID_SOCKET;
+    int status = 0;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    status = getaddrinfo(host, port, &hints, &results);
+    if (status != 0) {
+        if (error_buffer != NULL && error_buffer_size > 0) {
+#ifdef _WIN32
+            snprintf(error_buffer, error_buffer_size, "%s", gai_strerrorA(status));
+#else
+            snprintf(error_buffer, error_buffer_size, "%s", gai_strerror(status));
+#endif
+        }
+        return NS_INVALID_SOCKET;
+    }
+
+    for (candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+        socket_fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        if (!ns_socket_is_valid(socket_fd)) {
+            continue;
+        }
+
+        if (connect(socket_fd, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) == 0) {
+            break;
+        }
+
+        ns_socket_close(socket_fd);
+        socket_fd = NS_INVALID_SOCKET;
+    }
+
+    if (!ns_socket_is_valid(socket_fd) && error_buffer != NULL && error_buffer_size > 0) {
+        ns_last_error_string(error_buffer, error_buffer_size);
+    }
+
+    freeaddrinfo(results);
+    return socket_fd;
+}
+
+ns_socket_t ns_listen_tcp(const char *port,
+                          int backlog,
+                          char *error_buffer,
+                          size_t error_buffer_size) {
+    struct addrinfo hints;
+    struct addrinfo *results = NULL;
+    struct addrinfo *candidate = NULL;
+    ns_socket_t listen_socket = NS_INVALID_SOCKET;
+    int status = 0;
+    int reuse = 1;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    hints.ai_flags = AI_PASSIVE;
+
+    status = getaddrinfo(NULL, port, &hints, &results);
+    if (status != 0) {
+        if (error_buffer != NULL && error_buffer_size > 0) {
+#ifdef _WIN32
+            snprintf(error_buffer, error_buffer_size, "%s", gai_strerrorA(status));
+#else
+            snprintf(error_buffer, error_buffer_size, "%s", gai_strerror(status));
+#endif
+        }
+        return NS_INVALID_SOCKET;
+    }
+
+    for (candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+        listen_socket = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        if (!ns_socket_is_valid(listen_socket)) {
+            continue;
+        }
+
+        setsockopt(listen_socket,
+                   SOL_SOCKET,
+                   SO_REUSEADDR,
+                   (const char *) &reuse,
+                   (ns_socklen_t) sizeof(reuse));
+
+        if (bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
+            ns_socket_close(listen_socket);
+            listen_socket = NS_INVALID_SOCKET;
+            continue;
+        }
+
+        if (listen(listen_socket, backlog) == 0) {
+            break;
+        }
+
+        ns_socket_close(listen_socket);
+        listen_socket = NS_INVALID_SOCKET;
+    }
+
+    if (!ns_socket_is_valid(listen_socket) && error_buffer != NULL && error_buffer_size > 0) {
+        ns_last_error_string(error_buffer, error_buffer_size);
+    }
+
+    freeaddrinfo(results);
+    return listen_socket;
+}
+
+int ns_packet_set(NsPacket *packet,
+                  uint8_t type,
+                  uint32_t sender_id,
+                  uint32_t timestamp,
+                  const char *body) {
+    size_t body_length = 0;
+
+    if (packet == NULL) {
+        return -1;
+    }
+
+    if (body != NULL) {
+        body_length = strlen(body);
+        if (body_length > NS_PACKET_BODY_MAX) {
+            return -1;
+        }
+    }
+
+    memset(packet, 0, sizeof(*packet));
+    packet->header.type = type;
+    packet->header.sender_id = sender_id;
+    packet->header.timestamp = timestamp;
+    packet->header.body_len = (uint32_t) body_length;
+
+    if (body_length > 0) {
+        memcpy(packet->body, body, body_length);
+    }
+    packet->body[body_length] = '\0';
+    return 0;
+}
+
+int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
+    unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
+
+    if (!ns_socket_is_valid(socket_fd) || packet == NULL) {
+        return -1;
+    }
+    if (packet->header.body_len > NS_PACKET_BODY_MAX) {
+        return -1;
+    }
+
+    memset(header_buffer, 0, sizeof(header_buffer));
+    header_buffer[0] = packet->header.type;
+    ns_store_u32(header_buffer + 4, packet->header.sender_id);
+    ns_store_u32(header_buffer + 8, packet->header.timestamp);
+    ns_store_u32(header_buffer + 12, packet->header.body_len);
+
+    if (ns_send_all(socket_fd, header_buffer, sizeof(header_buffer)) != 0) {
+        return -1;
+    }
+
+    if (packet->header.body_len == 0) {
+        return 0;
+    }
+
+    return ns_send_all(socket_fd,
+                       (const unsigned char *) packet->body,
+                       (size_t) packet->header.body_len);
+}
+
+int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
+    unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
+    int recv_status = 0;
+
+    if (!ns_socket_is_valid(socket_fd) || packet == NULL) {
+        return -1;
+    }
+
+    recv_status = ns_recv_all(socket_fd, header_buffer, sizeof(header_buffer));
+    if (recv_status <= 0) {
+        return recv_status;
+    }
+
+    memset(packet, 0, sizeof(*packet));
+    packet->header.type = header_buffer[0];
+    packet->header.sender_id = ns_load_u32(header_buffer + 4);
+    packet->header.timestamp = ns_load_u32(header_buffer + 8);
+    packet->header.body_len = ns_load_u32(header_buffer + 12);
+
+    if (packet->header.body_len > NS_PACKET_BODY_MAX) {
+        return -1;
+    }
+
+    if (packet->header.body_len == 0) {
+        packet->body[0] = '\0';
+        return 1;
+    }
+
+    recv_status = ns_recv_all(socket_fd,
+                              (unsigned char *) packet->body,
+                              (size_t) packet->header.body_len);
+    if (recv_status <= 0) {
+        return recv_status;
+    }
+
+    packet->body[packet->header.body_len] = '\0';
+    return 1;
+}

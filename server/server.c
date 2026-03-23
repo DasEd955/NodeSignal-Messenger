@@ -1,0 +1,401 @@
+#include "server.h"
+
+#include "comm.h"
+#include "db.h"
+
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct NsClient {
+    ns_socket_t socket_fd;
+    bool active;
+    bool joined;
+    uint32_t user_id;
+    char username[NS_USERNAME_MAX + 1U];
+} NsClient;
+
+typedef struct NsServerState {
+    ns_socket_t listen_socket;
+    NsDatabase database;
+    NsClient clients[FD_SETSIZE];
+} NsServerState;
+
+static void ns_server_reset_client(NsClient *client) {
+    if (client == NULL) {
+        return;
+    }
+
+    client->socket_fd = NS_INVALID_SOCKET;
+    client->active = false;
+    client->joined = false;
+    client->user_id = 0U;
+    memset(client->username, 0, sizeof(client->username));
+}
+
+static void ns_server_init(NsServerState *server) {
+    size_t index = 0;
+
+    memset(server, 0, sizeof(*server));
+    server->listen_socket = NS_INVALID_SOCKET;
+
+    for (index = 0; index < FD_SETSIZE; ++index) {
+        ns_server_reset_client(&server->clients[index]);
+    }
+}
+
+static int ns_server_find_free_slot(const NsServerState *server) {
+    int index = 0;
+
+    for (index = 0; index < FD_SETSIZE; ++index) {
+        if (!server->clients[index].active) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+static bool ns_server_username_in_use(const NsServerState *server,
+                                      const char *username,
+                                      int skip_index) {
+    int index = 0;
+
+    for (index = 0; index < FD_SETSIZE; ++index) {
+        const NsClient *client = &server->clients[index];
+        if (!client->active || !client->joined || index == skip_index) {
+            continue;
+        }
+        if (strcmp(client->username, username) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void ns_server_send_error(NsClient *client, const char *message) {
+    NsPacket packet;
+
+    if (client == NULL || !client->active) {
+        return;
+    }
+
+    if (ns_packet_set(&packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), message) != 0) {
+        return;
+    }
+
+    (void) ns_send_packet(client->socket_fd, &packet);
+}
+
+static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave);
+
+static void ns_server_broadcast(NsServerState *server,
+                                const NsPacket *packet,
+                                int exclude_index) {
+    int index = 0;
+
+    for (index = 0; index < FD_SETSIZE; ++index) {
+        NsClient *client = &server->clients[index];
+        if (!client->active || !client->joined || index == exclude_index) {
+            continue;
+        }
+
+        if (ns_send_packet(client->socket_fd, packet) != 0) {
+            ns_server_disconnect_client(server, index, false);
+        }
+    }
+}
+
+static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave) {
+    NsClient *client = NULL;
+
+    if (server == NULL || client_index < 0 || client_index >= FD_SETSIZE) {
+        return;
+    }
+
+    client = &server->clients[client_index];
+    if (!client->active) {
+        return;
+    }
+
+    if (announce_leave && client->joined) {
+        NsPacket leave_packet;
+        char leave_text[NS_PACKET_BODY_MAX + 1U];
+
+        snprintf(leave_text, sizeof(leave_text), "* %s left the chat", client->username);
+        if (ns_packet_set(&leave_packet,
+                          NS_PACKET_LEAVE,
+                          client->user_id,
+                          ns_unix_time_now(),
+                          leave_text) == 0) {
+            ns_server_broadcast(server, &leave_packet, client_index);
+        }
+
+        printf("Client left: %s\n", client->username);
+    }
+
+    ns_socket_shutdown(client->socket_fd);
+    ns_socket_close(client->socket_fd);
+    ns_server_reset_client(client);
+}
+
+static int ns_server_handle_join(NsServerState *server,
+                                 int client_index,
+                                 const NsPacket *packet) {
+    NsClient *client = &server->clients[client_index];
+    NsPacket ack_packet;
+    NsPacket join_packet;
+    char status_text[NS_PACKET_BODY_MAX + 1U];
+    char join_text[NS_PACKET_BODY_MAX + 1U];
+    uint32_t user_id = 0U;
+
+    if (client->joined) {
+        ns_server_send_error(client, "This connection already joined the chat.");
+        return -1;
+    }
+
+    if (packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
+        ns_server_send_error(client, "Usernames must be between 1 and 32 characters.");
+        return -1;
+    }
+
+    if (ns_server_username_in_use(server, packet->body, client_index)) {
+        ns_server_send_error(client, "That username is already active.");
+        return -1;
+    }
+
+    if (ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
+        fprintf(stderr, "Failed to create user '%s': %s\n",
+                packet->body,
+                ns_db_last_error(&server->database));
+        ns_server_send_error(client, "The server could not register that username.");
+        return -1;
+    }
+
+    client->joined = true;
+    client->user_id = user_id;
+    snprintf(client->username, sizeof(client->username), "%s", packet->body);
+
+    snprintf(status_text, sizeof(status_text), "Connected as %s", client->username);
+    if (ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
+        return -1;
+    }
+
+    if (ns_send_packet(client->socket_fd, &ack_packet) != 0) {
+        return -1;
+    }
+
+    snprintf(join_text, sizeof(join_text), "* %s joined the chat", client->username);
+    if (ns_packet_set(&join_packet, NS_PACKET_JOIN, user_id, ns_unix_time_now(), join_text) == 0) {
+        ns_server_broadcast(server, &join_packet, -1);
+    }
+
+    printf("Client joined: %s\n", client->username);
+    return 0;
+}
+
+static int ns_server_handle_text(NsServerState *server,
+                                 int client_index,
+                                 const NsPacket *packet) {
+    NsClient *client = &server->clients[client_index];
+    NsPacket broadcast_packet;
+    char display_text[NS_PACKET_BODY_MAX + 1U];
+    uint32_t timestamp = ns_unix_time_now();
+    int display_length = 0;
+
+    if (!client->joined) {
+        ns_server_send_error(client, "Join the chat before sending messages.");
+        return -1;
+    }
+
+    if (packet->header.body_len == 0) {
+        ns_server_send_error(client, "Messages cannot be empty.");
+        return 0;
+    }
+
+    display_length = snprintf(display_text, sizeof(display_text), "%s: %s", client->username, packet->body);
+    if (display_length < 0 || (size_t) display_length >= sizeof(display_text)) {
+        ns_server_send_error(client, "That message is too long once the username is added.");
+        return 0;
+    }
+
+    if (ns_db_insert_message(&server->database, client->user_id, packet->body, timestamp) != 0) {
+        fprintf(stderr, "Failed to store message for '%s': %s\n",
+                client->username,
+                ns_db_last_error(&server->database));
+        ns_server_send_error(client, "The server could not store that message.");
+        return -1;
+    }
+
+    if (ns_packet_set(&broadcast_packet,
+                      NS_PACKET_TEXT,
+                      client->user_id,
+                      timestamp,
+                      display_text) != 0) {
+        ns_server_send_error(client, "That message is too long.");
+        return 0;
+    }
+
+    ns_server_broadcast(server, &broadcast_packet, -1);
+    printf("Message from %s: %s\n", client->username, packet->body);
+    return 0;
+}
+
+static void ns_server_accept_client(NsServerState *server) {
+    struct sockaddr_storage address;
+    ns_socklen_t address_length = (ns_socklen_t) sizeof(address);
+    ns_socket_t client_socket = NS_INVALID_SOCKET;
+    int slot_index = 0;
+
+    client_socket = accept(server->listen_socket, (struct sockaddr *) &address, &address_length);
+    if (!ns_socket_is_valid(client_socket)) {
+        return;
+    }
+
+    slot_index = ns_server_find_free_slot(server);
+    if (slot_index < 0) {
+        NsPacket error_packet;
+        ns_packet_set(&error_packet,
+                      NS_PACKET_ERROR,
+                      0U,
+                      ns_unix_time_now(),
+                      "The server is full right now.");
+        (void) ns_send_packet(client_socket, &error_packet);
+        ns_socket_shutdown(client_socket);
+        ns_socket_close(client_socket);
+        return;
+    }
+
+    ns_server_reset_client(&server->clients[slot_index]);
+    server->clients[slot_index].socket_fd = client_socket;
+    server->clients[slot_index].active = true;
+    printf("Accepted client on slot %d\n", slot_index);
+}
+
+int ns_server_run(const char *port, const char *database_path) {
+    NsServerState server;
+    char error_buffer[256];
+
+    ns_server_init(&server);
+
+    if (ns_db_open(&server.database, database_path) != 0) {
+        fprintf(stderr, "Unable to open database '%s'.\n", database_path);
+        return EXIT_FAILURE;
+    }
+
+    if (ns_db_init_schema(&server.database) != 0) {
+        fprintf(stderr, "Unable to initialize database schema.\n");
+        ns_db_close(&server.database);
+        return EXIT_FAILURE;
+    }
+
+    server.listen_socket = ns_listen_tcp(port, 16, error_buffer, sizeof(error_buffer));
+    if (!ns_socket_is_valid(server.listen_socket)) {
+        fprintf(stderr, "Unable to start server on port %s: %s\n", port, error_buffer);
+        ns_db_close(&server.database);
+        return EXIT_FAILURE;
+    }
+
+    printf("NodeSignal server listening on port %s\n", port);
+    printf("Using database at %s\n", database_path);
+
+    for (;;) {
+        fd_set read_set;
+        ns_socket_t max_socket = server.listen_socket;
+        int select_result = 0;
+        int index = 0;
+
+        FD_ZERO(&read_set);
+        FD_SET(server.listen_socket, &read_set);
+
+        for (index = 0; index < FD_SETSIZE; ++index) {
+            const NsClient *client = &server.clients[index];
+            if (!client->active) {
+                continue;
+            }
+
+            FD_SET(client->socket_fd, &read_set);
+            if (client->socket_fd > max_socket) {
+                max_socket = client->socket_fd;
+            }
+        }
+
+        select_result = select((int) max_socket + 1, &read_set, NULL, NULL, NULL);
+        if (select_result < 0) {
+            ns_last_error_string(error_buffer, sizeof(error_buffer));
+            fprintf(stderr, "select() failed: %s\n", error_buffer);
+            break;
+        }
+
+        if (FD_ISSET(server.listen_socket, &read_set)) {
+            ns_server_accept_client(&server);
+        }
+
+        for (index = 0; index < FD_SETSIZE; ++index) {
+            NsClient *client = &server.clients[index];
+            NsPacket packet;
+            int receive_result = 0;
+
+            if (!client->active || !FD_ISSET(client->socket_fd, &read_set)) {
+                continue;
+            }
+
+            receive_result = ns_recv_packet(client->socket_fd, &packet);
+            if (receive_result <= 0) {
+                ns_server_disconnect_client(&server, index, client->joined);
+                continue;
+            }
+
+            switch (packet.header.type) {
+                case NS_PACKET_JOIN:
+                    if (ns_server_handle_join(&server, index, &packet) != 0) {
+                        ns_server_disconnect_client(&server, index, false);
+                    }
+                    break;
+                case NS_PACKET_TEXT:
+                    if (ns_server_handle_text(&server, index, &packet) != 0) {
+                        ns_server_disconnect_client(&server, index, false);
+                    }
+                    break;
+                case NS_PACKET_LEAVE:
+                    ns_server_disconnect_client(&server, index, true);
+                    break;
+                default:
+                    ns_server_send_error(client, "Unsupported packet type.");
+                    ns_server_disconnect_client(&server, index, false);
+                    break;
+            }
+        }
+    }
+
+    ns_socket_shutdown(server.listen_socket);
+    ns_socket_close(server.listen_socket);
+    ns_db_close(&server.database);
+    return EXIT_FAILURE;
+}
+
+int main(int argc, char **argv) {
+    const char *port = "5555";
+    const char *database_path = "database/messages.db";
+    int net_status = 0;
+    int run_status = 0;
+
+    if (argc >= 2) {
+        port = argv[1];
+    }
+    if (argc >= 3) {
+        database_path = argv[2];
+    }
+
+    net_status = ns_net_init();
+    if (net_status != 0) {
+        fprintf(stderr, "Network initialization failed.\n");
+        return EXIT_FAILURE;
+    }
+
+    run_status = ns_server_run(port, database_path);
+    ns_net_cleanup();
+    return run_status;
+}

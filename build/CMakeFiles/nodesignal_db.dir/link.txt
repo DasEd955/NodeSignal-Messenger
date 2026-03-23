@@ -1,0 +1,2 @@
+/usr/bin/ar qc libnodesignal_db.a CMakeFiles/nodesignal_db.dir/database/db.c.o
+/usr/bin/ranlib libnodesignal_db.a
