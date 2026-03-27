@@ -90,7 +90,7 @@ static void ns_server_init(NsServerState *server) {
     memset(server, 0, sizeof(*server));
     server->listen_socket = NS_INVALID_SOCKET;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
         ns_server_reset_client(&server->clients[index]);
     }
 }
@@ -113,8 +113,8 @@ static void ns_server_init(NsServerState *server) {
 static int ns_server_find_free_slot(const NsServerState *server) {
     int index = 0;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
-        if (!server->clients[index].active) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
+        if(!server->clients[index].active) {
             return index;
         }
     }
@@ -146,12 +146,12 @@ static int ns_server_find_free_slot(const NsServerState *server) {
 static bool ns_server_username_in_use(const NsServerState *server, const char *username, int skip_index) {
     int index = 0;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
         const NsClient *client = &server->clients[index];
-        if (!client->active || !client->joined || index == skip_index) {
+        if(!client->active || !client->joined || index == skip_index) {
             continue;
         }
-        if (strcmp(client->username, username) == 0) {
+        if(strcmp(client->username, username) == 0) {
             return true;
         }
     }
@@ -159,61 +159,119 @@ static bool ns_server_username_in_use(const NsServerState *server, const char *u
     return false;
 }
 
+// static void ns_server_send_error -- Builds & sends an ERROR packet to a client
+    /*
+    -- Acts as a helper function for reporting invalid requests or server side problems to a client
+    -- Used when the server needs to notify a client that an operation failed or the request was not allowed
+
+    -- NsClient *client: The client that should receive the error message
+    -- const char *message: The error text to place within the packet body
+
+    -- Declares NsPacket packet to store the outgoing error packet
+    -- If client is NULL or client is inactive, return immediately
+    -- Calls ns_packet_set() to build an ERROR packet
+        -- Uses NS_PACKET_ERROR as the packet type
+        -- Uses 0U as the User ID
+        -- Uses ns_unix_time_now() as the packet timestamp
+        -- Uses message as the packet body
+    -- If ns_packet_set() fails, return immediately
+    -- Calls ns_send_packet() to send the error packet to the client's socket
+    -- Casts the return value to (void) as the function does not use that result
+    */
 static void ns_server_send_error(NsClient *client, const char *message) {
     NsPacket packet;
 
-    if (client == NULL || !client->active) {
-        return;
-    }
+    if(client == NULL || !client->active) {return;}
 
-    if (ns_packet_set(&packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), message) != 0) {
-        return;
-    }
+    if(ns_packet_set(&packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), message) != 0) {return;}
 
-    (void) ns_send_packet(client->socket_fd, &packet);
+    (void)ns_send_packet(client->socket_fd, &packet);
 }
 
+// static void ns_server_disconnect_client -- Forward Declaration
+    /*
+    -- Forward declaration of ns_server_disconnect_client()
+    -- This is required as server.c defines ns_server_broadcast() first, which calls this function before the compiler has seen its full implementation
+    -- Without forward declaration, the compiler would reach the call before knowing what the function is
+    */
 static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave);
 
-static void ns_server_broadcast(NsServerState *server,
-                                const NsPacket *packet,
-                                int exclude_index) {
+// static void ns_server_broadcast -- Sends a packet to all active joined clients, except an optional excluded client 
+    /*
+    -- Acts as a helper function for delivering server messages to multiple connected clients
+    -- Used when the server broadcasts chat events such as joins, leaves, or text messages
+
+    -- NsServerState *server: The server state containing the client records
+        -- Assumes server points to a valid NsServerState
+    -- const NsPacket *packet: The packet to send to the selected clients
+        -- Assumes packet points to a valid NsPacket
+    -- int exclude_index: The client index to skip while broadcasting
+
+    -- Declares int index = 0 to use as a loop counter
+    -- Loops through all clients slots frm 0 to FD_SETSIZE - 1
+        -- Creates a pointer to the current client record
+        -- Skips the current slot if:
+            -- The client is not active
+            -- The client has not joined
+            -- The current index matches exclude_index
+        -- Calls ns_send_packet() to send the packet to the client's socket
+        -- If sending fails, calls ns_server_disconnect_client() to remove the client
+    -- Sends the packet only to valid active joined clients that are not excluded 
+    */
+static void ns_server_broadcast(NsServerState *server, const NsPacket *packet, int exclude_index) {
     int index = 0;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
         NsClient *client = &server->clients[index];
-        if (!client->active || !client->joined || index == exclude_index) {
+        if(!client->active || !client->joined || index == exclude_index) {
             continue;
         }
 
-        if (ns_send_packet(client->socket_fd, packet) != 0) {
+        if(ns_send_packet(client->socket_fd, packet) != 0) {
             ns_server_disconnect_client(server, index, false);
         }
     }
 }
 
+// static void ns_server_disconnect_client -- Disconnects a client from the server & optionally announces that the client have left the chat
+    /*
+    -- Acts as a helper function for removing a client from the server
+    -- Used when a client disconnects, leaves normally, or is dropped due to an error
+
+    -- NsServerState *server: The server state that contains the client records
+    -- int client_index: The index of the client slot to disconnect
+    -- bool announce_leave: Determines whether the server should notify other clients that this client left
+
+    -- If server is NULL || client is outside valid client array range || client at client_index is not active, return immediately
+    -- If announce_leave is true & client has already joined:
+        -- Creates a leave message packet
+        -- Broadcasts the leave message to the other connected clients
+    -- Shuts down the client's socket connection
+    -- Closes the client's socket
+    -- Resets the client slot so it can be reused
+    */
 static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave) {
     NsClient *client = NULL;
 
-    if (server == NULL || client_index < 0 || client_index >= FD_SETSIZE) {
+    if(server == NULL || client_index < 0 || client_index >= FD_SETSIZE) {
         return;
     }
 
     client = &server->clients[client_index];
-    if (!client->active) {
+    if(!client->active) {
         return;
     }
 
-    if (announce_leave && client->joined) {
+    if(announce_leave && client->joined) {
         NsPacket leave_packet;
         char leave_text[NS_PACKET_BODY_MAX + 1U];
 
         snprintf(leave_text, sizeof(leave_text), "* %s left the chat", client->username);
-        if (ns_packet_set(&leave_packet,
-                          NS_PACKET_LEAVE,
-                          client->user_id,
-                          ns_unix_time_now(),
-                          leave_text) == 0) {
+        if(ns_packet_set(&leave_packet,
+                         NS_PACKET_LEAVE,
+                         client->user_id,
+                         ns_unix_time_now(),
+                         leave_text) == 0) {
             ns_server_broadcast(server, &leave_packet, client_index);
         }
 
