@@ -1,5 +1,13 @@
-#include "server.h"
+/* ===================================================================================
+server.c -- Defines the Logic for Running the Server 
+    -- Implements the messenger server
+    -- Accepts clients
+    -- Handles packets
+    -- Broadcasts messages
+    -- Stores chat activity
+=================================================================================== */
 
+#include "server.h"
 #include "comm.h"
 #include "db.h"
 
@@ -8,6 +16,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+// typedef struct NsClient -- Represents a connected client on the server
+    /*
+    -- ns_socket_t socket_fd: The socket for the client's network connection
+    -- bool active: Whether this client slot is currently in use
+    -- bool joined: Whether the client has completed the chat join process
+    -- uint32_t user_id: The numeric ID associated with the user from database
+    -- char username[NS_USERNAME_MAX + 1U]: The client's username as a C string, including room for null terminator
+    */
 typedef struct NsClient {
     ns_socket_t socket_fd;
     bool active;
@@ -16,16 +32,35 @@ typedef struct NsClient {
     char username[NS_USERNAME_MAX + 1U];
 } NsClient;
 
+// typedef struct NsServerState -- Represents the overall state of the server while running
+    /*
+    -- ns_socket_t listen_socket: The server's main listening socket; used to accept new client connections
+    -- NsDatabase database: The database object the server uses to store & retrieve client data
+    -- NsClient clients[FD_SETSIZE]: An array of client records. Each element stores information about one connected client
+    */
 typedef struct NsServerState {
     ns_socket_t listen_socket;
     NsDatabase database;
     NsClient clients[FD_SETSIZE];
 } NsServerState;
 
+// static void ns_server_reset_client -- Resets an NsClient record back to a clean default state
+    /*
+    -- Acts as a helper function for initializing or clearing a client slot
+    -- Used by the server when a client slot is first prepared or after a client disconnects
+
+    -- NsClient *client: The NsClient record being reset to default state
+
+    -- If client is NULL, return immediately
+    -- Otherwise, clear all of the client fields
+        -- Sets socket_fd to NS_INVALID_SOCKET
+        -- Sets active to false
+        -- Sets joined to false
+        -- Sets user_id to 0
+        -- Clears the username array with memset()
+    */
 static void ns_server_reset_client(NsClient *client) {
-    if (client == NULL) {
-        return;
-    }
+    if (client == NULL) {return;}
 
     client->socket_fd = NS_INVALID_SOCKET;
     client->active = false;
