@@ -69,6 +69,21 @@ static void ns_server_reset_client(NsClient *client) {
     memset(client->username, 0, sizeof(client->username));
 }
 
+// static void ns_server_init -- Initializes the server state to a clean default state
+    /* 
+    -- Acts as a helper function for preparing an NsServerState before the server starts running
+    -- Used to clear all existing data in the server structure and set up default values
+    
+    -- NsServerState *server: The server state structure being initialized
+
+    -- Assumes the server points to a valid NsServerState
+    -- Declares size_t index = 0 to use as a loop counter
+    -- Clears the entire server structure with memset()
+    -- Sets listen_socket to NS_INVALID_SOCKET so the server starts with no valid listening socket
+    -- Loops through all client slots from 0 to FD_SETSIZE - 1
+        -- Calls ns_server_reset_client() on each client entry
+        -- Ensures every client slot starts in an unused default state
+    */
 static void ns_server_init(NsServerState *server) {
     size_t index = 0;
 
@@ -80,6 +95,21 @@ static void ns_server_init(NsServerState *server) {
     }
 }
 
+// static int ns_server_find_free_slot -- Finds the index of the first unused client slot
+    /*
+    -- Acts as a helper function for locating an available position in the server's client array
+    -- Used when a new client connects and the server needs a free slot to store that client's data
+
+    -- const NsServerState *server: The server state containing the array of client records
+
+    -- Assumes server points to a valid NsServerState
+    -- Declares int index = 0 to use as a loop counter
+    -- Loops through all client slots from 0 to FD_SETSIZE - 1
+        -- Checks whether current client slot is inactive
+        -- If the slot is inactive, returns that index immediately
+    -- If no inactive client slot is found, returns -1
+    -- A return value of -1 means the server has no free client slots available
+    */
 static int ns_server_find_free_slot(const NsServerState *server) {
     int index = 0;
 
@@ -92,9 +122,28 @@ static int ns_server_find_free_slot(const NsServerState *server) {
     return -1;
 }
 
-static bool ns_server_username_in_use(const NsServerState *server,
-                                      const char *username,
-                                      int skip_index) {
+// static bool ns_server_username_in_use -- Checks whether a username is already being used by another active joined client
+    /*
+    -- Acts as a helper function for validating usernames during the joining process
+    -- Used to prevent multiple connected clients from using the same username simultaneously
+
+    -- const NsServerState *server: The server state containing the array of client records
+    -- const char *username: The username being checked for duplicate usage
+    -- int skip_index: A client index to ignore during the search
+
+    -- Assumes server points to a valid NsServerState
+    -- Assumes username points to a valid null terminated string
+    -- Declares int index = 0 to use as a loop counter
+    -- Loops through all client slots from 0 to FD_SETSIZE - 1
+        -- Creates a pointer to the current client record
+        -- Skips the current slot if:
+            -- The client is not active
+            -- The client has not joined yet
+            -- The current index matches skip_index
+    -- Compares the client's username to the given username using strcmp()
+    -- If the usernames match, return true immediately
+    */
+static bool ns_server_username_in_use(const NsServerState *server, const char *username, int skip_index) {
     int index = 0;
 
     for (index = 0; index < FD_SETSIZE; ++index) {
