@@ -242,10 +242,33 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
     return 0;
 }
 
-int ns_db_insert_message(NsDatabase *database,
-                         uint32_t sender_id,
-                         const char *body,
-                         uint32_t timestamp) {
+/* int ns_db_insert_message -- Inserts a new message into the messages table
+
+    -- Acts as a public database function for storing a chat message in the database
+    -- Used when the server receives a valid message from a connected client
+
+    -- NsDatabase *database: The database structure whose SQLite connection will be used to insert the message
+    -- uint32_t sender_id: The database ID of the user who sent the message
+    -- const char *body: The text body of the message
+    -- uint32_t timestamp: The Unix timestamp representing when the message was sent
+
+    -- Declares sqlite3_stmt *statement = NULL to hold the prepared INSERT statement
+    -- Declares int rc = 0 to store SQLite return codes
+    -- Declares int step_result = 0 to store the result of sqlite3_step()
+
+    -- If database or database->handle or body is NULL, returns -1
+
+    -- Calls sqlite3_bind_int() to bind sender_id into the INSERT statement
+    -- Calls sqlite3_bind_text() to bind the message body into the INSERT statement
+    -- Calls sqlite3_bind_int() to bind the timestamp into the INSERT statement
+
+    -- Calls sqlite3_step() to execute the INSERT statement
+    -- Finalizes the statement with sqlite3_finalize()
+
+    -- Returns 0 if sqlite3_step() returns SQLITE_DONE
+    -- Otherwise returns -1
+    */
+int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *body, uint32_t timestamp) {
     sqlite3_stmt *statement = NULL;
     int rc = 0;
     int step_result = 0;
@@ -254,11 +277,7 @@ int ns_db_insert_message(NsDatabase *database,
         return -1;
     }
 
-    rc = sqlite3_prepare_v2(database->handle,
-                            "INSERT INTO messages (sender_id, body, sent_at) VALUES (?1, ?2, ?3);",
-                            -1,
-                            &statement,
-                            NULL);
+    rc = sqlite3_prepare_v2(database->handle, "INSERT INTO messages (sender_id, body, sent_at) VALUES (?1, ?2, ?3);", -1, &statement, NULL);
     if (rc != SQLITE_OK) {
         return -1;
     }
