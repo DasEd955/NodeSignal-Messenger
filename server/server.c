@@ -460,9 +460,33 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     return NS_HANDLE_OK;
 }
 
-//
+// static void ns_server_accept_client -- Accepts a new client connection & assigns it to a free client slot
     /* 
+    -- Acts as a helper function for accepting incoming client connections on the server's listening socket
+    -- Used when select() indicates that the listening socket is ready to accept a new connection
+
+    -- NsServerState *server: The server state containing the listening socket and client records
     
+    -- Declares sockaddr_storage address to hold the connecting client's network address
+    -- Declares address_length as the size of the address structure used by accept()
+    -- Declares client_socket & initializes it to NS_INVALID_SOCKET
+    -- Declares slot_index = 0 to store the index of an available client slot
+
+    -- Calls accept() on the server's listening socket to accept a new client connection
+        -- If the returned client socket is invalid, returns immediately
+
+    -- Calls ns_server_find_free_slot() to locate an unused client slot
+    -- If no free slot is available:
+        -- Declares an ERROR packet
+        -- Builds the ERROR packet with the message "The server is full right now."
+        -- Sends the error packet to the connecting client
+        -- Shuts down & closes the client socket
+        -- Returns immediately
+    
+    -- Calls ns_server_reset_client() on the chosen client slot to ensure it starts clean
+    -- Stores the accepted socket in the client slot
+    -- Marks the client slot as active
+    -- Prints the accepted slot number to the server console
     */
 static void ns_server_accept_client(NsServerState *server) {
     struct sockaddr_storage address;
@@ -478,11 +502,7 @@ static void ns_server_accept_client(NsServerState *server) {
     slot_index = ns_server_find_free_slot(server);
     if (slot_index < 0) {
         NsPacket error_packet;
-        ns_packet_set(&error_packet,
-                      NS_PACKET_ERROR,
-                      0U,
-                      ns_unix_time_now(),
-                      "The server is full right now.");
+        ns_packet_set(&error_packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), "The server is full right now.");
         (void) ns_send_packet(client_socket, &error_packet);
         ns_socket_shutdown(client_socket);
         ns_socket_close(client_socket);
@@ -495,6 +515,77 @@ static void ns_server_accept_client(NsServerState *server) {
     printf("Accepted client on slot %d\n", slot_index);
 }
 
+// DEV NOTE: Consider splitting into helpers to improve readability
+    // Possibly: ns_server_build_read_set() && ns_server_process_ready_clients()
+
+// int ns_server_run -- Starts the NodeSignal Server & runs the main server loop
+    /*
+    -- Acts as the main entry point for running the NodeSignal server
+    -- Used to initializer server state, open the database, start listening for clients, and process network events
+
+    -- const char *port: The port number the server should listen on
+    -- const char *database_path: The path to the SQLite database file
+
+    -- Declares NSServerState server to store the server's runtime state
+    -- Declares error_buffer to store readable socket error messages
+
+    -- Calls ns_server_init() to initialize the server state
+    
+    -- Calls ns_db_open() to open the database at database_path
+        -- If opening the database fails:
+            -- Prints an error to stderr & returns EXIT_FAILURE
+    
+    -- Calls ns_db_init_schema() to ensure the database schema exists
+        -- If schema initialization fails:
+            -- Prints an error to stderr, closes the database & returns EXIT_FAILURE
+    
+    -- Prints startup messages showing the listening port & database path
+
+    -- Enters an infinite server loop
+        -- Declares read_set to track sockets ready for reading
+        -- Declares max_socket to store the highest socket value for select()
+        -- Declares select_result to store the return value from select()
+        -- Declares index = 0 to use as a loop counter
+
+        -- Clears read_set with FD_ZERO()
+        -- Adds the listening socket to read_set with FD_SET()
+
+        -- Loops through all client slots from 0 to FD_SETSIZE - 1
+            -- Skips inactive clients
+            -- Adds each active client socket to read_set
+            -- Updates max_socket if needed
+        
+        -- Calls select() to wait until the listening socket or a client socket is ready
+            -- If select() fails:
+                -- Stores the socket error text in error_buffer, prints the error to stderr, breaks out of the server loop
+                
+        -- If the listening socket is ready:
+            -- Calls ns_server_accept_client() to accept a new client connection
+
+        -- Loops through all client slots again
+            -- Skips inactive clients or clients whose sockets are not ready
+            -- Calls ns_recv_packet() to receive the next packet from the client
+            -- If receiving fails or the client is disconnectedL
+                -- Calls ns_server_disconnect_client() & continues to the next client
+            
+            -- Checks packet.header.type to determine how to handle the packet
+                -- NS_PACKET_JOIN:
+                    -- Calls ns_server_handle_join()
+                    -- If the handler returns a nonzero value, disconnects the client
+                -- NS_PACKET_TEXT:
+                    -- Calls ns_server_handle_text()
+                    -- If the handler returns a nonzero value, disconnects the client
+                -- NS_PACKET_LEAVE:
+                    -- Disconnects the client & announces the leave event
+                -- default:
+                    -- Sends an error packet for an unsupported packet type; disconnects the client
+    
+    -- After leaving the infinite server loop:
+        -- Shuts down the listening socket
+        -- Closes the listening socket
+        -- Closes the database
+        -- Returns EXIT_FAILURE
+    */
 int ns_server_run(const char *port, const char *database_path) {
     NsServerState server;
     char error_buffer[256];
@@ -519,7 +610,7 @@ int ns_server_run(const char *port, const char *database_path) {
         return EXIT_FAILURE;
     }
 
-    printf("NodeSignal server listening on port %s\n", port);
+    printf("NodeSignal Server listening on port %s\n", port);
     printf("Using database at %s\n", database_path);
 
     for (;;) {
@@ -597,6 +688,34 @@ int ns_server_run(const char *port, const char *database_path) {
     return EXIT_FAILURE;
 }
 
+// int main -- Entry point of the NodeSignal Server program
+    /* 
+    -- Acts as the program's starting point
+    -- Used to read optional CLI arguments, initialize networking, run the server, and clean up networking before exiting
+    
+    -- int argc: The number of CLI arguments passed to the program
+    -- char **argv: The array of CLI argument strings
+
+    -- Declares port & initializes it to the default port "5555"
+    -- Declares database_path & initializes it to the default database path "database/messages.db"
+    -- Declares net_status = 0 to store the result of network initialization
+    -- Declares run_status = 0 to store the return value from ns_server_run()
+
+    -- If argc >= 2:
+        -- Uses argv[1] as the port number instead of the default port
+    -- If argc >= 3:
+        -- Uses argv[2] as the database path instead of the default path
+    
+    -- Calls ns_net_init() to initialize the networking layer
+    -- If network initialization fails:
+        -- Prints an error message to stderr & returns EXIT_FAILURE
+    
+    -- Calls ns_server_run() to start & run the server
+    -- Stores the return value in run_status
+
+    -- Calls ns_net_cleanup() to clean up networking resources
+    -- Returns run_status as the program's final exit code
+    */
 int main(int argc, char **argv) {
     const char *port = "5555";
     const char *database_path = "database/messages.db";
