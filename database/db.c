@@ -179,9 +179,39 @@ int ns_db_init_schema(NsDatabase *database) {
     return 0;
 }
 
-int ns_db_get_or_create_user(NsDatabase *database,
-                             const char *username,
-                             uint32_t *out_user_id) {
+/* int ns_db_get_or_create_user -- Retrieves an existing user's ID or creates a new user in the database
+
+    -- Acts as a public database function for ensuring that a username exists in the users table 
+    -- Used when the server needs a valid database user ID for a client joining the chat
+
+    -- NsDatabase *database: The database structure whose SQLite connection will be used for the lookup or insertion
+    -- const char *username: The username to search for or insert into the users table
+    -- uint32_t *out_user_id: Output parameter that stores the user's database ID
+
+    -- Declares sqlite3_stmt *statement = NULL to hold the prepared insert statement
+    -- Declares int rc = 0 to store SQLite return codes
+    -- Declares int step_result = 0 to store the result of sqlite3_step()
+
+    -- If database or database->handle or username or out_user_id is NULL, return -1
+
+    -- Calls ns_db_find_user_id() to check whether the user already exists
+    -- If the user is found:
+        -- Stores the existing user ID in out_user_id & returns 0
+    
+    -- Calls sqlite3_prepare_v2() to prepare an INSERT statement for a new user
+    -- If statement preparation fails, returns - 1
+
+    -- Calls sqlite3_bind_text() to bind the username into the INSERT statement
+    -- Calls sqlite3_bind_int() to bind the current Unix time as created_at
+    
+    -- Calls sqlite3_step() to execute the INSERT statement
+    -- Finalizes the statement with sqlite3_finalize()
+    -- If sqlite3_step() does not return SQLITE_DONE, returns -1
+
+    -- Calls sqlite3_last_insert_rowid() to get the ID of the newly inserted user
+    -- Stores that ID in out_user_id & returns 0 upon success
+    */
+int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_t *out_user_id) {
     sqlite3_stmt *statement = NULL;
     int rc = 0;
     int step_result = 0;
@@ -194,11 +224,7 @@ int ns_db_get_or_create_user(NsDatabase *database,
         return 0;
     }
 
-    rc = sqlite3_prepare_v2(database->handle,
-                            "INSERT INTO users (username, created_at) VALUES (?1, ?2);",
-                            -1,
-                            &statement,
-                            NULL);
+    rc = sqlite3_prepare_v2(database->handle, "INSERT INTO users (username, created_at) VALUES (?1, ?2);", -1, &statement, NULL);
     if (rc != SQLITE_OK) {
         return -1;
     }
@@ -246,9 +272,23 @@ int ns_db_insert_message(NsDatabase *database,
     return step_result == SQLITE_DONE ? 0 : -1;
 }
 
+/* const char *ns_db_last_error -- Returns the most recent SQLite error message for the database connection
+
+    -- Acts as a public database function for retrieving readable database error messages
+    -- Used when other parts of the program need to report why a database operation failed
+
+    -- const NsDatabase *database: The database structure whose SQLite connection will be checked for the last error
+
+    -- If database pr database->handle is NULL:
+        -- Returns the string "Database Unavailable"
+    
+    -- Otherwise:
+        -- Calls sqlite3_errmsg() to retrieve the most recent SQLite error message
+        -- Returns that error message string
+    */
 const char *ns_db_last_error(const NsDatabase *database) {
     if (database == NULL || database->handle == NULL) {
-        return "database unavailable";
+        return "Database Unavailable";
     }
 
     return sqlite3_errmsg(database->handle);
