@@ -22,8 +22,8 @@ enum {
     NS_HANDLE_DISCONNECT = -1
 };
 
-// typedef struct NsClient -- Represents a connected client on the server
-    /*
+/* typedef struct NsClient -- Represents a connected client on the server
+    
     -- ns_socket_t socket_fd: The socket for the client's network connection
     -- bool active: Whether this client slot is currently in use
     -- bool joined: Whether the client has completed the chat join process
@@ -38,8 +38,8 @@ typedef struct NsClient {
     char username[NS_USERNAME_MAX + 1U];
 } NsClient;
 
-// typedef struct NsServerState -- Represents the overall state of the server while running
-    /*
+/* typedef struct NsServerState -- Represents the overall state of the server while running
+    
     -- ns_socket_t listen_socket: The server's main listening socket; used to accept new client connections
     -- NsDatabase database: The database object the server uses to store & retrieve client data
     -- NsClient clients[FD_SETSIZE]: An array of client records. Each element stores information about one connected client
@@ -50,8 +50,8 @@ typedef struct NsServerState {
     NsClient clients[FD_SETSIZE];
 } NsServerState;
 
-// static void ns_server_reset_client -- Resets an NsClient record back to a clean default state
-    /*
+/* static void ns_server_reset_client -- Resets an NsClient record back to a clean default state
+    
     -- Acts as a helper function for initializing or clearing a client slot
     -- Used by the server when a client slot is first prepared or after a client disconnects
 
@@ -75,8 +75,8 @@ static void ns_server_reset_client(NsClient *client) {
     memset(client->username, 0, sizeof(client->username));
 }
 
-// static void ns_server_init -- Initializes the server state to a clean default state
-    /* 
+/* static void ns_server_init -- Initializes the server state to a clean default state
+     
     -- Acts as a helper function for preparing an NsServerState before the server starts running
     -- Used to clear all existing data in the server structure and set up default values
     
@@ -101,8 +101,8 @@ static void ns_server_init(NsServerState *server) {
     }
 }
 
-// static int ns_server_find_free_slot -- Finds the index of the first unused client slot
-    /*
+/* static int ns_server_find_free_slot -- Finds the index of the first unused client slot
+    
     -- Acts as a helper function for locating an available position in the server's client array
     -- Used when a new client connects and the server needs a free slot to store that client's data
 
@@ -128,8 +128,8 @@ static int ns_server_find_free_slot(const NsServerState *server) {
     return -1;
 }
 
-// static bool ns_server_username_in_use -- Checks whether a username is already being used by another active joined client
-    /*
+/* static bool ns_server_username_in_use -- Checks whether a username is already being used by another active joined client
+    
     -- Acts as a helper function for validating usernames during the joining process
     -- Used to prevent multiple connected clients from using the same username simultaneously
 
@@ -165,8 +165,8 @@ static bool ns_server_username_in_use(const NsServerState *server, const char *u
     return false;
 }
 
-// static void ns_server_send_error -- Builds & sends an ERROR packet to a client
-    /*
+/* static void ns_server_send_error -- Builds & sends an ERROR packet to a client
+    
     -- Acts as a helper function for reporting invalid requests or server side problems to a client
     -- Used when the server needs to notify a client that an operation failed or the request was not allowed
 
@@ -194,16 +194,16 @@ static void ns_server_send_error(NsClient *client, const char *message) {
     (void)ns_send_packet(client->socket_fd, &packet);
 }
 
-// static void ns_server_disconnect_client -- Forward Declaration
-    /*
+/* static void ns_server_disconnect_client -- Forward Declaration
+    
     -- Forward declaration of ns_server_disconnect_client()
     -- This is required as server.c defines ns_server_broadcast() first, which calls this function before the compiler has seen its full implementation
     -- Without forward declaration, the compiler would reach the call before knowing what the function is
     */
 static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave);
 
-// static void ns_server_broadcast -- Sends a packet to all active joined clients, except an optional excluded client 
-    /*
+/* static void ns_server_broadcast -- Sends a packet to all active joined clients, except an optional excluded client 
+    
     -- Acts as a helper function for delivering server messages to multiple connected clients
     -- Used when the server broadcasts chat events such as joins, leaves, or text messages
 
@@ -239,8 +239,8 @@ static void ns_server_broadcast(NsServerState *server, const NsPacket *packet, i
     }
 }
 
-// static void ns_server_disconnect_client -- Disconnects a client from the server & optionally announces that the client have left the chat
-    /*
+/* static void ns_server_disconnect_client -- Disconnects a client from the server & optionally announces that the client have left the chat
+    
     -- Acts as a helper function for removing a client from the server
     -- Used when a client disconnects, leaves normally, or is dropped due to an error
 
@@ -293,8 +293,8 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
     // ns_server_join_request() -- Checks already joined, username length, and duplicate usernames
     // ns_server_finalize_join() -- Stores the client state, sends the ACK, broadcasts the join message
 
-// static int ns_server_handle_join -- Processes a client's JOIN packet & completes the chat join flow
-    /*
+/* static int ns_server_handle_join -- Processes a client's JOIN packet & completes the chat join flow
+    
     -- Acts as a helper function for handling a client's request to join the chat
     -- Used when the server receives an NS_PACKET_JOIN packet from a connected client
 
@@ -385,8 +385,8 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
     return NS_HANDLE_OK;
 }
 
-// static int ns_server_handle_text -- Processes a client's TEXT packet
-    /*
+/* static int ns_server_handle_text -- Processes a client's TEXT packet
+    
     -- Acts as a helper function for handling chat messages sent by a connected client
     -- Used when the server receives an NS_PACKET_TEXT packet
 
@@ -460,8 +460,8 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     return NS_HANDLE_OK;
 }
 
-// static void ns_server_accept_client -- Accepts a new client connection & assigns it to a free client slot
-    /* 
+/* static void ns_server_accept_client -- Accepts a new client connection & assigns it to a free client slot
+     
     -- Acts as a helper function for accepting incoming client connections on the server's listening socket
     -- Used when select() indicates that the listening socket is ready to accept a new connection
 
@@ -518,8 +518,8 @@ static void ns_server_accept_client(NsServerState *server) {
 // DEV NOTE: Consider splitting into helpers to improve readability
     // Possibly: ns_server_build_read_set() && ns_server_process_ready_clients()
 
-// int ns_server_run -- Starts the NodeSignal Server & runs the main server loop
-    /*
+/* int ns_server_run -- Starts the NodeSignal Server & runs the main server loop
+    
     -- Acts as the main entry point for running the NodeSignal server
     -- Used to initializer server state, open the database, start listening for clients, and process network events
 
@@ -688,8 +688,8 @@ int ns_server_run(const char *port, const char *database_path) {
     return EXIT_FAILURE;
 }
 
-// int main -- Entry point of the NodeSignal Server program
-    /* 
+/* int main -- Entry point of the NodeSignal Server program
+     
     -- Acts as the program's starting point
     -- Used to read optional CLI arguments, initialize networking, run the server, and clean up networking before exiting
     
