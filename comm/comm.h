@@ -1,6 +1,13 @@
+/* ===================================================================================
+comm.h -- Declares the public interface for the shared networking & packet protocol module
+=================================================================================== */
+
 #ifndef NS_COMM_H
 #define NS_COMM_H
 
+// Implements Functionality for Non-Windows Systems
+    // Enables POSIX & common system declarations before system headers are included
+    // Helps expose networking related functions & types on Unix/Linux Systems
 #if !defined(_WIN32)
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200112L
@@ -14,12 +21,24 @@
 #include <stdint.h>
 #include <time.h>
 
+// Platform Specific Networking Setup (Windows & Unix/Linux)
+    // Creates a shared cross-platform interface so that the program can utilize socket data types without caring whether it is compiled on Windows or Linux
+// For Windows:
+    // Includes Winsock headers
+    // Defines ns_socket_t as SOCKET
+    // Defines ns_socklen_t as int
+    // Defines NS_INVALID_SOCKET using Windows INVALID_SOCKET
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
 typedef SOCKET ns_socket_t;
 typedef int ns_socklen_t;
 #define NS_INVALID_SOCKET INVALID_SOCKET
+// For Unix/Linux:
+    // Includes POSIX socket headers
+    // Defines ns_socket_t as int
+    // Defines ns_socklen_t as socklen_t
+    // Defines NS_INVALID_SOCKET as -1
 #else
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -31,6 +50,9 @@ typedef socklen_t ns_socklen_t;
 #define NS_INVALID_SOCKET (-1)
 #endif
 
+// For C++ Compatibility
+    // If a C++ compiler includes this header, it treats the function declarations as C functions
+    // Prevents C++ name mangling & lets C and C++ link properly
 #ifdef __cplusplus
 extern "C" {
 #endif
