@@ -20,11 +20,35 @@ comm.c -- Implements the shared networking & packet protocol logic
 
 #define NS_PACKET_HEADER_SIZE 16U
 
+/* static void ns_store_u32 -- Stores a 32-bit unsigned integer into a byte buffer in network byte order
+
+    -- Acts as a helper function for serializing 32-bit values into packet headers
+    -- Used when preparing packet header fields before sending data across the network
+
+    -- unsigned char *buffer: The byte buffer where the converted value will be stored
+    -- uint32_t value: The 32-bit unsigned integer value to store
+
+    -- Declares uint32_t network_value to hold the converted network byte order value
+    -- Calls htonl() to convert value from host byte order to network byte order
+    -- Calls memcpy() to copy the converted value into the destination buffer
+    */
 static void ns_store_u32(unsigned char *buffer, uint32_t value) {
     uint32_t network_value = htonl(value);
     memcpy(buffer, &network_value, sizeof(network_value));
 }
 
+/* static uint32_t ns_load_u32 -- Loads a 32-bit unsigned integer from a byte buffer & converts it to host byte order
+
+    -- Acts as a helper function for deserializing 32-bit values from packet headers
+    -- Used when reading packet header fields received from the network
+
+    -- const unsigned char *buffer: The byte buffer containing the serialized 32-bit value
+
+    -- Declares uint32_t network_value = 0 to store the raw value copied from the buffer
+    -- Calls memcpy() to copy the 32-bit value from the buffer into network_value
+    -- Calls ntohl() to convert the value from network byte order to host byte order
+    -- Returns the converted 32-bit value
+    */
 static uint32_t ns_load_u32(const unsigned char *buffer) {
     uint32_t network_value = 0;
     memcpy(&network_value, buffer, sizeof(network_value));
