@@ -1,3 +1,12 @@
+/* ===================================================================================
+comm.c -- Implements the shared networking & packet protocol logic
+    -- Initializes & cleans up the networking subsystem
+    -- Provides cross-platform socket utilities
+    -- Connects to & listens for TCP connections
+    -- Builds, sends, and receives protocol packets
+    -- Converts networking errors into readable messages
+=================================================================================== */
+
 #include "comm.h"
 
 #include <errno.h>
