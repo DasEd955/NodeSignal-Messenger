@@ -100,6 +100,13 @@ typedef struct NsPacket {
     char body[NS_PACKET_BODY_MAX + 1U];
 } NsPacket;
 
+/* Return codes used by ns_recv_packet(). */
+enum {
+    NS_RECV_ERROR = -1,
+    NS_RECV_CLOSED = 0,
+    NS_RECV_OK = 1
+};
+
 /* int ns_net_init -- Initializes the networking subsystem for the program
 
     -- Used before performing socket operations
@@ -148,18 +155,67 @@ uint32_t ns_unix_time_now(void);
 
     -- char *buffer: The character buffer where the error message will be written
     -- size_t buffer_size: The size of the buffer in bytes
+
     -- Used when the program needs a readable description of the most recent networking or system error
     -- Returns a pointer to the error message string stored in the buffer
     */
 const char *ns_last_error_string(char *buffer, size_t buffer_size);
 
+/* ns_socket_t ns_connect_tcp -- Connects to a remote TCP server & returns the connected socket 
+
+    -- const char *host: The hostname or IP address of the remote sever
+    -- const char *port: The port number of the remote server
+    -- char *error_buffer: Buffer used to store readable error message if the connection fails
+    -- size_t error_buffer_size: The size of error_buffer in bytes
+
+    -- Used by the client to establish a TCP connection to the server
+    -- Returns a valid socket upon success or NS_INVALID_SOCKET upon failure
+    */
 ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffer, size_t error_buffer_size);
 
+/* ns_socket_t ns_listen_tcp -- Creates a TCP listening socket on the given port
+
+    -- const char *port: The port number the server should listen on
+    -- int backlog: The maximum number of pending connection requests
+    -- char *error_buffer: Buffer used to store readable error message if the setup fails
+    -- size_t error_buffer_size: The size of error_buffer in bytes
+
+    -- Used by the server to create & start a listening TCP socket
+    -- Returns a valid listening socket upon success or NS_INVALID_SOCKET upon failure
+    */
 ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, size_t error_buffer_size);
 
+/* int ns_packet_set -- Initializes a packet with the given header values and body text
+
+    -- NsPacket *packet: The packet structure to initialize
+    -- uint8_t type: The packet type to store in the header
+    -- uint32_t sender_id: The sender ID to store in the header
+    -- uint32_t timestamp: The Unix timestamp to store in the header
+    -- const char *body: The body text to copy into the packet
+    
+    -- Used to prepare packets before sending them across the network
+    -- Returns 0 upon success or -1 upon failure
+    */
 int ns_packet_set(NsPacket *packet, uint8_t type, uint32_t sender_id, uint32_t timestamp, const char *body);
 
+/* int ns_send_packet -- Sends a packet over a socket connection
+
+    -- ns_socket_t socket_fd: The socket used to send the packet
+    -- const NsPacket *packet: The packet to send
+
+    -- Used to transmit a complete packet, including its header & body, across the network
+    -- Returns 0 upon success or -1 upon failure
+    */
 int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet);
+
+/* int ns_recv_packet -- Receives a packet from a socket connection
+
+    -- ns_socket_t socket_fd: The socket used the receive the packet
+    -- NsPacket *packet: The packet structure where the received data will be stored
+
+    -- Used to read a complete packet, including its header & body, from the network
+    -- Returns NS_RECV_OK upon success, NS_RECV_CLOSED if the connection was closed cleanly, or NS_RECV_ERROR upon failure
+    */
 int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet);
 
 #ifdef __cplusplus
