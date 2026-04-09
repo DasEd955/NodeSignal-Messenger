@@ -55,15 +55,34 @@ static uint32_t ns_load_u32(const unsigned char *buffer) {
     return ntohl(network_value);
 }
 
+/* static int ns_send_all -- Sends all bytes from a buffer over a socket connection
+
+    -- Acts as a helper function for reliably sending an entire block of data
+    -- Used when packet headers or packet bodies must be fully transmitted across the network
+
+    -- ns_socket_t socket_fd: The socket used to send the data
+    -- const unsigned char *buffer: The byte buffer containing the data to send
+    -- size_t buffer_size: The total number of bytes that must be sent
+
+    -- Declares size_t total_sent = 0 to track how many bytes have already been sent
+
+    -- Loops while total_send is less than buffer_size
+    -- Calls send() to transmit the remaining unsent bytes
+        -- On Windows, uses int sent_now
+        -- On Unix/Linux, uses ssize_t sent_now
+    -- If send() returns 0 or a negative value:
+        -- Returns -1 to indicate failure
+    -- Otherwise:
+        -- Adds the number of bytes sent to total_sent
+    
+    -- Returns 0 after all bytes in the buffer have been sent successfully
+    */
 static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_t buffer_size) {
     size_t total_sent = 0;
 
     while (total_sent < buffer_size) {
 #ifdef _WIN32
-        int sent_now = send(socket_fd,
-                            (const char *) buffer + total_sent,
-                            (int) (buffer_size - total_sent),
-                            0);
+        int sent_now = send(socket_fd, (const char *) buffer + total_sent, (int) (buffer_size - total_sent), 0);
 #else
         ssize_t sent_now = send(socket_fd, buffer + total_sent, buffer_size - total_sent, 0);
 #endif
@@ -76,15 +95,39 @@ static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_
     return 0;
 }
 
+/* static int ns_recv_all -- Receives an exact number of bytes from a socket connection 
+
+    -- Acts as a helper function for reliably reading a complete block of data
+    -- Used when packet headers or packet bodies must be fully received from the network
+
+    -- ns_socket_t socket_fd: The socket used to receive the data
+    -- unsigned char *buffer: The byte buffer where the received data will be stored
+    -- size_t buffer_size: The exact number of bytes that must be received 
+
+    -- Declares size_t total_received to track how many bytes have already been received
+
+    -- Loops while total_received is less than buffer_size
+    -- Calls recv() to read the remaining bytes
+        -- On Windows, uses int received_now
+        -- On Unix/Linux, uses ssize_t received_now
+    
+    -- If recv() returns 0:
+        -- Returns 0 if no bytes were received at all, meaning the connection was closed cleanly
+        -- Returns -1 if only part of the requested data was received before the connection closed
+
+    -- If recv() returns a negative value:
+        -- Returns -1 to indicate failure
+    -- Otherwise:
+        -- Add the number of bytes received to total_received
+    
+    -- Returns 1 after the full requested number of bytes has been received successfully
+    */
 static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buffer_size) {
     size_t total_received = 0;
 
     while (total_received < buffer_size) {
 #ifdef _WIN32
-        int received_now = recv(socket_fd,
-                                (char *) buffer + total_received,
-                                (int) (buffer_size - total_received),
-                                0);
+        int received_now = recv(socket_fd, (char *) buffer + total_received, (int) (buffer_size - total_received), 0);
 #else
         ssize_t received_now = recv(socket_fd, buffer + total_received, buffer_size - total_received, 0);
 #endif
@@ -100,6 +143,20 @@ static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buff
     return 1;
 }
 
+/* int ns_net_init -- Initializes the network subsystem for the program
+
+    -- Acts as a public communication function for preparing the network layer beforer socket operations
+    -- Used before creating, listening on, or sending data through sockets
+
+    -- On Windows:
+        -- Declares WSADATA data to store Windock initialization data
+        -- Calls WSAStartup() with version 2.2 to initialize Winsock
+        -- Returns the result of WSAStartup()
+    
+    -- On Unix/Linux:
+        -- No specialize network initialization is required
+        -- Returns 0
+    */
 int ns_net_init(void) {
 #ifdef _WIN32
     WSADATA data;
@@ -109,12 +166,39 @@ int ns_net_init(void) {
 #endif
 }
 
+/* void ns_net_cleanup -- Cleans up the networking subsystem before program exit
+
+    -- Acts as a public communication function for releasing networking resources
+    -- Used after the program is finished performing socket operations
+
+    -- On Windows:
+        -- Calls WSACleanup() to clean up Winsock resources
+    
+    -- On Unix/Linux:
+        -- No special network cleanup is required
+    */
 void ns_net_cleanup(void) {
 #ifdef _WIN32
     WSACleanup();
 #endif
 }
 
+/* void ns_socket_close -- Closes a socket if it is valid
+
+    -- Acts as a public communication function for safely closing a socket
+    -- Used when the program is finished using a socket connection
+
+    -- ns_socket_t socket_fd: The socket to close
+
+    -- If ns_socket_is_valid() reports that the socket is invalid:
+        -- Returns immediately
+    
+    -- On Windows:
+        -- Calls closesocket() to close the socket
+    
+    -- On Unix/Linux:
+        -- Calls close() system call to close the socket
+    */
 void ns_socket_close(ns_socket_t socket_fd) {
     if (!ns_socket_is_valid(socket_fd)) {
         return;
@@ -127,6 +211,24 @@ void ns_socket_close(ns_socket_t socket_fd) {
 #endif
 }
 
+/* int ns_socket_shutdown -- Shuts down communication on a socket if it is valid
+
+    -- Acts as a public communication function for stopping sends & receives on a socket
+    -- Used before closing a socket connection or when the program wants to terminate communication cleanly
+
+    -- ns_socket_t socket_fd: The socket to shut down
+
+    -- If ns_socket_is_valid() reports that the socket is invalid:
+        -- Returns 0 immediately
+    
+    -- On Windows:
+        -- Calls shutdown() with SD_BOTH to disable both sending & receiving 
+        -- Returns the result of shutdown()
+
+    -- On Unix/Linux:
+        -- Calls shutdown with SHUT_RDWR to disable both sending & receiving 
+        -- Returns the result of shutdown()
+    */
 int ns_socket_shutdown(ns_socket_t socket_fd) {
     if (!ns_socket_is_valid(socket_fd)) {
         return 0;
@@ -139,10 +241,33 @@ int ns_socket_shutdown(ns_socket_t socket_fd) {
 #endif
 }
 
+/* int ns_socket_is_valid -- Checks whether a socket handle is invalid
+
+    -- Acts as a public communication function for validating socket handles
+    -- Used before performing operations such as send, receive, shutdown, or close
+    
+    -- ns_socket_t socket_fd: The socket handle being checked
+
+    -- Compares socket_fd against NS_INVALID_SOCKET
+        -- Returns nonzero if the socket is valid
+        -- Returns zero if the socket is invalid
+    */
 int ns_socket_is_valid(ns_socket_t socket_fd) {
     return socket_fd != NS_INVALID_SOCKET;
 }
 
+/* uint32_t ns_unix_time_now -- Returns the current Unix timestamp
+
+    -- Acts as a public communication utility function for retrieving the current time
+    -- Used when packet timestamps or database timestamps are needed
+
+    -- Declares time_t now & stores the result of time(NULL)
+    -- If time(NULL) returns a negative value:
+        -- Returns 0U
+    -- Otherwise:
+        -- Casts the current time to uint32_t
+        -- Returns the Unix timestamp in seconds
+    */
 uint32_t ns_unix_time_now(void) {
     time_t now = time(NULL);
     if (now < 0) {
@@ -151,6 +276,31 @@ uint32_t ns_unix_time_now(void) {
     return (uint32_t) now;
 }
 
+/* const char *ns_last_error_string -- Retrieves the most recent system or socket error message as readable text
+
+    -- Acts as a public communication utility function for converting the latest error into a readable string
+    -- Used when the program needs to report networking or system errors to the console or user
+
+    -- char *buffer: The character buffer where the error message will be written
+    -- size_t buffer_size: The size of the buffer in bytes
+
+    -- If the buffer is NULL or buffer_size is 0:
+        -- Returns an empty string
+    
+    -- On Windows:
+        -- Declares DWORD error_code to store the result of WSAGetLastError()
+        -- Declares DWORD copied to store the number of characters written by FormatMessageA()
+        -- Calls WSAGetLastError() to get the latest Winsock error code 
+        -- Calls FormatMessageA() to convert that error code into a readable message in buffer
+        -- If FormatMessageA() fails:
+            -- Uses snprintf() to write a fallback error message into buffer
+    
+    -- On Unix/Linux:
+        -- Calls strerror(errno) to get the latest system error string
+        -- Uses snprintf() to copy that error string into buffer
+    
+    -- Returns buffer
+    */
 const char *ns_last_error_string(char *buffer, size_t buffer_size) {
     if (buffer == NULL || buffer_size == 0) {
         return "";
@@ -158,13 +308,8 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
 
 #ifdef _WIN32
     DWORD error_code = WSAGetLastError();
-    DWORD copied = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                                  NULL,
-                                  error_code,
-                                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                                  buffer,
-                                  (DWORD) buffer_size,
-                                  NULL);
+    DWORD copied = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_code,
+                                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, (DWORD) buffer_size, NULL);                              
     if (copied == 0) {
         snprintf(buffer, buffer_size, "winsock error %lu", (unsigned long) error_code);
     }
