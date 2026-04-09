@@ -70,13 +70,13 @@ static int ns_db_find_user_id(NsDatabase *database, const char *username, uint32
     int rc = 0;
 
     rc = sqlite3_prepare_v2(database->handle, "SELECT id FROM users WHERE username = ?1;", -1, &statement, NULL);
-    if (rc != SQLITE_OK) {
+    if(rc != SQLITE_OK) {
         return -1;
     }
 
     sqlite3_bind_text(statement, 1, username, -1, SQLITE_TRANSIENT);
     step_result = sqlite3_step(statement);
-    if (step_result == SQLITE_ROW) {
+    if(step_result == SQLITE_ROW) {
         *out_user_id = (uint32_t) sqlite3_column_int(statement, 0);
         sqlite3_finalize(statement);
         return 0;
@@ -105,12 +105,12 @@ static int ns_db_find_user_id(NsDatabase *database, const char *username, uint32
     -- Return 0 upon success
     */
 int ns_db_open(NsDatabase *database, const char *path) {
-    if (database == NULL || path == NULL) {
+    if(database == NULL || path == NULL) {
         return -1;
     }
 
     memset(database, 0, sizeof(*database));
-    if (sqlite3_open(path, &database->handle) != SQLITE_OK) {
+    if(sqlite3_open(path, &database->handle) != SQLITE_OK) {
         ns_db_close(database);
         return -1;
     }
@@ -130,7 +130,7 @@ int ns_db_open(NsDatabase *database, const char *path) {
     -- Sets database->handle to NULL so the structure no longer points to a closed connection
     */
 void ns_db_close(NsDatabase *database) {
-    if (database == NULL || database->handle == NULL) {
+    if(database == NULL || database->handle == NULL) {
         return;
     }
 
@@ -163,13 +163,13 @@ int ns_db_init_schema(NsDatabase *database) {
     char *error_message = NULL;
     int rc = 0;
 
-    if (database == NULL || database->handle == NULL) {
+    if(database == NULL || database->handle == NULL) {
         return -1;
     }
 
     rc = sqlite3_exec(database->handle, NS_SCHEMA_SQL, NULL, NULL, &error_message);
-    if (rc != SQLITE_OK) {
-        if (error_message != NULL) {
+    if(rc != SQLITE_OK) {
+        if(error_message != NULL) {
             fprintf(stderr, "SQLite schema error: %s\n", error_message);
             sqlite3_free(error_message);
         }
@@ -216,16 +216,16 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
     int rc = 0;
     int step_result = 0;
 
-    if (database == NULL || database->handle == NULL || username == NULL || out_user_id == NULL) {
+    if(database == NULL || database->handle == NULL || username == NULL || out_user_id == NULL) {
         return -1;
     }
 
-    if (ns_db_find_user_id(database, username, out_user_id) == 0) {
+    if(ns_db_find_user_id(database, username, out_user_id) == 0) {
         return 0;
     }
 
     rc = sqlite3_prepare_v2(database->handle, "INSERT INTO users (username, created_at) VALUES (?1, ?2);", -1, &statement, NULL);
-    if (rc != SQLITE_OK) {
+    if(rc != SQLITE_OK) {
         return -1;
     }
 
@@ -234,7 +234,7 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
 
     step_result = sqlite3_step(statement);
     sqlite3_finalize(statement);
-    if (step_result != SQLITE_DONE) {
+    if(step_result != SQLITE_DONE) {
         return -1;
     }
 
@@ -273,12 +273,12 @@ int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *b
     int rc = 0;
     int step_result = 0;
 
-    if (database == NULL || database->handle == NULL || body == NULL) {
+    if(database == NULL || database->handle == NULL || body == NULL) {
         return -1;
     }
 
     rc = sqlite3_prepare_v2(database->handle, "INSERT INTO messages (sender_id, body, sent_at) VALUES (?1, ?2, ?3);", -1, &statement, NULL);
-    if (rc != SQLITE_OK) {
+    if(rc != SQLITE_OK) {
         return -1;
     }
 
@@ -306,7 +306,7 @@ int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *b
         -- Returns that error message string
     */
 const char *ns_db_last_error(const NsDatabase *database) {
-    if (database == NULL || database->handle == NULL) {
+    if(database == NULL || database->handle == NULL) {
         return "Database Unavailable";
     }
 

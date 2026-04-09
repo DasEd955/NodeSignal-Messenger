@@ -66,7 +66,7 @@ typedef struct NsServerState {
         -- Clears the username array with memset()
     */
 static void ns_server_reset_client(NsClient *client) {
-    if (client == NULL) {return;}
+    if(client == NULL) {return;}
 
     client->socket_fd = NS_INVALID_SOCKET;
     client->active = false;
@@ -342,20 +342,20 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
     char join_text[NS_PACKET_BODY_MAX + 1U];
     uint32_t user_id = 0U;
 
-    if (client->joined) {
+    if(client->joined) {
         ns_server_send_error(client, "This connection already joined the chat.");
         return NS_HANDLE_DISCONNECT;
     }
-    if (packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
+    if(packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
         ns_server_send_error(client, "Usernames must be between 1 and 32 characters.");
         return NS_HANDLE_DISCONNECT;
     }
-    if (ns_server_username_in_use(server, packet->body, client_index)) {
+    if(ns_server_username_in_use(server, packet->body, client_index)) {
         ns_server_send_error(client, "That username is already active.");
         return NS_HANDLE_DISCONNECT;
     }
 
-    if (ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
+    if(ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
         fprintf(stderr, "Failed to create user '%s': %s\n",
                 packet->body,
                 ns_db_last_error(&server->database));
@@ -368,16 +368,16 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
     snprintf(client->username, sizeof(client->username), "%s", packet->body);
 
     snprintf(status_text, sizeof(status_text), "Connected as %s", client->username);
-    if (ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
+    if(ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
         return NS_HANDLE_DISCONNECT;
     }
 
-    if (ns_send_packet(client->socket_fd, &ack_packet) != 0) {
+    if(ns_send_packet(client->socket_fd, &ack_packet) != 0) {
         return NS_HANDLE_DISCONNECT;
     }
 
     snprintf(join_text, sizeof(join_text), "* %s joined the chat", client->username);
-    if (ns_packet_set(&join_packet, NS_PACKET_JOIN, user_id, ns_unix_time_now(), join_text) == 0) {
+    if(ns_packet_set(&join_packet, NS_PACKET_JOIN, user_id, ns_unix_time_now(), join_text) == 0) {
         ns_server_broadcast(server, &join_packet, -1);
     }
 
@@ -428,29 +428,29 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     uint32_t timestamp = ns_unix_time_now();
     int display_length = 0;
 
-    if (!client->joined) {
+    if(!client->joined) {
         ns_server_send_error(client, "Join the chat before sending messages.");
         return NS_HANDLE_DISCONNECT;
     }
-    if (packet->header.body_len == 0) {
+    if(packet->header.body_len == 0) {
         ns_server_send_error(client, "Messages cannot be empty.");
         return NS_HANDLE_OK;
     }
 
     // Developer Note -- Potentially Optimize this block
     display_length = snprintf(display_text, sizeof(display_text), "%s: %s", client->username, packet->body);
-    if (display_length < 0 || (size_t) display_length >= sizeof(display_text)) {
+    if(display_length < 0 || (size_t) display_length >= sizeof(display_text)) {
         ns_server_send_error(client, "That message is too long once the username is added.");
         return NS_HANDLE_OK;
     }
 
-    if (ns_db_insert_message(&server->database, client->user_id, packet->body, timestamp) != 0) {
+    if(ns_db_insert_message(&server->database, client->user_id, packet->body, timestamp) != 0) {
         fprintf(stderr, "Failed to store message for '%s': %s\n", client->username, ns_db_last_error(&server->database));
         ns_server_send_error(client, "The server could not store that message.");
         return NS_HANDLE_DISCONNECT;
     }
 
-    if (ns_packet_set(&broadcast_packet, NS_PACKET_TEXT, client->user_id, timestamp, display_text) != 0) {
+    if(ns_packet_set(&broadcast_packet, NS_PACKET_TEXT, client->user_id, timestamp, display_text) != 0) {
         ns_server_send_error(client, "That message is too long.");
         return NS_HANDLE_OK;
     }
@@ -495,12 +495,12 @@ static void ns_server_accept_client(NsServerState *server) {
     int slot_index = 0;
 
     client_socket = accept(server->listen_socket, (struct sockaddr *) &address, &address_length);
-    if (!ns_socket_is_valid(client_socket)) {
+    if(!ns_socket_is_valid(client_socket)) {
         return;
     }
 
     slot_index = ns_server_find_free_slot(server);
-    if (slot_index < 0) {
+    if(slot_index < 0) {
         NsPacket error_packet;
         ns_packet_set(&error_packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), "The server is full right now.");
         (void) ns_send_packet(client_socket, &error_packet);
@@ -592,19 +592,19 @@ int ns_server_run(const char *port, const char *database_path) {
 
     ns_server_init(&server);
 
-    if (ns_db_open(&server.database, database_path) != 0) {
+    if(ns_db_open(&server.database, database_path) != 0) {
         fprintf(stderr, "Unable to open database '%s'.\n", database_path);
         return EXIT_FAILURE;
     }
 
-    if (ns_db_init_schema(&server.database) != 0) {
+    if(ns_db_init_schema(&server.database) != 0) {
         fprintf(stderr, "Unable to initialize database schema.\n");
         ns_db_close(&server.database);
         return EXIT_FAILURE;
     }
 
     server.listen_socket = ns_listen_tcp(port, 16, error_buffer, sizeof(error_buffer));
-    if (!ns_socket_is_valid(server.listen_socket)) {
+    if(!ns_socket_is_valid(server.listen_socket)) {
         fprintf(stderr, "Unable to start server on port %s: %s\n", port, error_buffer);
         ns_db_close(&server.database);
         return EXIT_FAILURE;
@@ -613,7 +613,7 @@ int ns_server_run(const char *port, const char *database_path) {
     printf("NodeSignal Server listening on port %s\n", port);
     printf("Using database at %s\n", database_path);
 
-    for (;;) {
+    for(;;) {
         fd_set read_set;
         ns_socket_t max_socket = server.listen_socket;
         int select_result = 0;
@@ -622,7 +622,7 @@ int ns_server_run(const char *port, const char *database_path) {
         FD_ZERO(&read_set);
         FD_SET(server.listen_socket, &read_set);
 
-        for (index = 0; index < FD_SETSIZE; ++index) {
+        for(index = 0; index < FD_SETSIZE; ++index) {
             const NsClient *client = &server.clients[index];
             if (!client->active) {
                 continue;
@@ -635,39 +635,39 @@ int ns_server_run(const char *port, const char *database_path) {
         }
 
         select_result = select((int) max_socket + 1, &read_set, NULL, NULL, NULL);
-        if (select_result < 0) {
+        if(select_result < 0) {
             ns_last_error_string(error_buffer, sizeof(error_buffer));
             fprintf(stderr, "select() failed: %s\n", error_buffer);
             break;
         }
 
-        if (FD_ISSET(server.listen_socket, &read_set)) {
+        if(FD_ISSET(server.listen_socket, &read_set)) {
             ns_server_accept_client(&server);
         }
 
-        for (index = 0; index < FD_SETSIZE; ++index) {
+        for(index = 0; index < FD_SETSIZE; ++index) {
             NsClient *client = &server.clients[index];
             NsPacket packet;
             int receive_result = 0;
 
-            if (!client->active || !FD_ISSET(client->socket_fd, &read_set)) {
+            if(!client->active || !FD_ISSET(client->socket_fd, &read_set)) {
                 continue;
             }
 
             receive_result = ns_recv_packet(client->socket_fd, &packet);
-            if (receive_result <= 0) {
+            if(receive_result <= 0) {
                 ns_server_disconnect_client(&server, index, client->joined);
                 continue;
             }
 
-            switch (packet.header.type) {
+            switch(packet.header.type) {
                 case NS_PACKET_JOIN:
-                    if (ns_server_handle_join(&server, index, &packet) != 0) {
+                    if(ns_server_handle_join(&server, index, &packet) != 0) {
                         ns_server_disconnect_client(&server, index, false);
                     }
                     break;
                 case NS_PACKET_TEXT:
-                    if (ns_server_handle_text(&server, index, &packet) != 0) {
+                    if(ns_server_handle_text(&server, index, &packet) != 0) {
                         ns_server_disconnect_client(&server, index, false);
                     }
                     break;
@@ -722,15 +722,15 @@ int main(int argc, char **argv) {
     int net_status = 0;
     int run_status = 0;
 
-    if (argc >= 2) {
+    if(argc >= 2) {
         port = argv[1];
     }
-    if (argc >= 3) {
+    if(argc >= 3) {
         database_path = argv[2];
     }
 
     net_status = ns_net_init();
-    if (net_status != 0) {
+    if(net_status != 0) {
         fprintf(stderr, "Network initialization failed.\n");
         return EXIT_FAILURE;
     }

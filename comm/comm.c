@@ -80,13 +80,13 @@ static uint32_t ns_load_u32(const unsigned char *buffer) {
 static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_t buffer_size) {
     size_t total_sent = 0;
 
-    while (total_sent < buffer_size) {
+    while(total_sent < buffer_size) {
 #ifdef _WIN32
         int sent_now = send(socket_fd, (const char *) buffer + total_sent, (int) (buffer_size - total_sent), 0);
 #else
         ssize_t sent_now = send(socket_fd, buffer + total_sent, buffer_size - total_sent, 0);
 #endif
-        if (sent_now <= 0) {
+        if(sent_now <= 0) {
             return -1;
         }
         total_sent += (size_t) sent_now;
@@ -125,16 +125,16 @@ static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_
 static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buffer_size) {
     size_t total_received = 0;
 
-    while (total_received < buffer_size) {
+    while(total_received < buffer_size) {
 #ifdef _WIN32
         int received_now = recv(socket_fd, (char *) buffer + total_received, (int) (buffer_size - total_received), 0);
 #else
         ssize_t received_now = recv(socket_fd, buffer + total_received, buffer_size - total_received, 0);
 #endif
-        if (received_now == 0) {
+        if(received_now == 0) {
             return total_received == 0 ? 0 : -1;
         }
-        if (received_now < 0) {
+        if(received_now < 0) {
             return -1;
         }
         total_received += (size_t) received_now;
@@ -200,7 +200,7 @@ void ns_net_cleanup(void) {
         -- Calls close() system call to close the socket
     */
 void ns_socket_close(ns_socket_t socket_fd) {
-    if (!ns_socket_is_valid(socket_fd)) {
+    if(!ns_socket_is_valid(socket_fd)) {
         return;
     }
 
@@ -230,7 +230,7 @@ void ns_socket_close(ns_socket_t socket_fd) {
         -- Returns the result of shutdown()
     */
 int ns_socket_shutdown(ns_socket_t socket_fd) {
-    if (!ns_socket_is_valid(socket_fd)) {
+    if(!ns_socket_is_valid(socket_fd)) {
         return 0;
     }
 
@@ -270,7 +270,7 @@ int ns_socket_is_valid(ns_socket_t socket_fd) {
     */
 uint32_t ns_unix_time_now(void) {
     time_t now = time(NULL);
-    if (now < 0) {
+    if(now < 0) {
         return 0U;
     }
     return (uint32_t) now;
@@ -302,7 +302,7 @@ uint32_t ns_unix_time_now(void) {
     -- Returns buffer
     */
 const char *ns_last_error_string(char *buffer, size_t buffer_size) {
-    if (buffer == NULL || buffer_size == 0) {
+    if(buffer == NULL || buffer_size == 0) {
         return "";
     }
 
@@ -310,7 +310,7 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
     DWORD error_code = WSAGetLastError();
     DWORD copied = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_code,
                                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, (DWORD) buffer_size, NULL);                              
-    if (copied == 0) {
+    if(copied == 0) {
         snprintf(buffer, buffer_size, "winsock error %lu", (unsigned long) error_code);
     }
 #else
@@ -336,8 +336,8 @@ ns_socket_t ns_connect_tcp(const char *host,
     hints.ai_protocol = IPPROTO_TCP;
 
     status = getaddrinfo(host, port, &hints, &results);
-    if (status != 0) {
-        if (error_buffer != NULL && error_buffer_size > 0) {
+    if(status != 0) {
+        if(error_buffer != NULL && error_buffer_size > 0) {
 #ifdef _WIN32
             snprintf(error_buffer, error_buffer_size, "%s", gai_strerrorA(status));
 #else
@@ -347,13 +347,13 @@ ns_socket_t ns_connect_tcp(const char *host,
         return NS_INVALID_SOCKET;
     }
 
-    for (candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
         socket_fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if (!ns_socket_is_valid(socket_fd)) {
+        if(!ns_socket_is_valid(socket_fd)) {
             continue;
         }
 
-        if (connect(socket_fd, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) == 0) {
+        if(connect(socket_fd, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) == 0) {
             break;
         }
 
@@ -361,7 +361,7 @@ ns_socket_t ns_connect_tcp(const char *host,
         socket_fd = NS_INVALID_SOCKET;
     }
 
-    if (!ns_socket_is_valid(socket_fd) && error_buffer != NULL && error_buffer_size > 0) {
+    if(!ns_socket_is_valid(socket_fd) && error_buffer != NULL && error_buffer_size > 0) {
         ns_last_error_string(error_buffer, error_buffer_size);
     }
 
@@ -387,8 +387,8 @@ ns_socket_t ns_listen_tcp(const char *port,
     hints.ai_flags = AI_PASSIVE;
 
     status = getaddrinfo(NULL, port, &hints, &results);
-    if (status != 0) {
-        if (error_buffer != NULL && error_buffer_size > 0) {
+    if(status != 0) {
+        if(error_buffer != NULL && error_buffer_size > 0) {
 #ifdef _WIN32
             snprintf(error_buffer, error_buffer_size, "%s", gai_strerrorA(status));
 #else
@@ -398,9 +398,9 @@ ns_socket_t ns_listen_tcp(const char *port,
         return NS_INVALID_SOCKET;
     }
 
-    for (candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
         listen_socket = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if (!ns_socket_is_valid(listen_socket)) {
+        if(!ns_socket_is_valid(listen_socket)) {
             continue;
         }
 
@@ -410,13 +410,13 @@ ns_socket_t ns_listen_tcp(const char *port,
                    (const char *) &reuse,
                    (ns_socklen_t) sizeof(reuse));
 
-        if (bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
+        if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
             ns_socket_close(listen_socket);
             listen_socket = NS_INVALID_SOCKET;
             continue;
         }
 
-        if (listen(listen_socket, backlog) == 0) {
+        if(listen(listen_socket, backlog) == 0) {
             break;
         }
 
@@ -424,7 +424,7 @@ ns_socket_t ns_listen_tcp(const char *port,
         listen_socket = NS_INVALID_SOCKET;
     }
 
-    if (!ns_socket_is_valid(listen_socket) && error_buffer != NULL && error_buffer_size > 0) {
+    if(!ns_socket_is_valid(listen_socket) && error_buffer != NULL && error_buffer_size > 0) {
         ns_last_error_string(error_buffer, error_buffer_size);
     }
 
@@ -439,11 +439,11 @@ int ns_packet_set(NsPacket *packet,
                   const char *body) {
     size_t body_length = 0;
 
-    if (packet == NULL) {
+    if(packet == NULL) {
         return -1;
     }
 
-    if (body != NULL) {
+    if(body != NULL) {
         body_length = strlen(body);
         if (body_length > NS_PACKET_BODY_MAX) {
             return -1;
@@ -456,7 +456,7 @@ int ns_packet_set(NsPacket *packet,
     packet->header.timestamp = timestamp;
     packet->header.body_len = (uint32_t) body_length;
 
-    if (body_length > 0) {
+    if(body_length > 0) {
         memcpy(packet->body, body, body_length);
     }
     packet->body[body_length] = '\0';
@@ -466,10 +466,10 @@ int ns_packet_set(NsPacket *packet,
 int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
 
-    if (!ns_socket_is_valid(socket_fd) || packet == NULL) {
+    if(!ns_socket_is_valid(socket_fd) || packet == NULL) {
         return -1;
     }
-    if (packet->header.body_len > NS_PACKET_BODY_MAX) {
+    if(packet->header.body_len > NS_PACKET_BODY_MAX) {
         return -1;
     }
 
@@ -479,11 +479,11 @@ int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     ns_store_u32(header_buffer + 8, packet->header.timestamp);
     ns_store_u32(header_buffer + 12, packet->header.body_len);
 
-    if (ns_send_all(socket_fd, header_buffer, sizeof(header_buffer)) != 0) {
+    if(ns_send_all(socket_fd, header_buffer, sizeof(header_buffer)) != 0) {
         return -1;
     }
 
-    if (packet->header.body_len == 0) {
+    if(packet->header.body_len == 0) {
         return 0;
     }
 
@@ -496,12 +496,12 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
     int recv_status = 0;
 
-    if (!ns_socket_is_valid(socket_fd) || packet == NULL) {
+    if(!ns_socket_is_valid(socket_fd) || packet == NULL) {
         return -1;
     }
 
     recv_status = ns_recv_all(socket_fd, header_buffer, sizeof(header_buffer));
-    if (recv_status <= 0) {
+    if(recv_status <= 0) {
         return recv_status;
     }
 
@@ -511,11 +511,11 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     packet->header.timestamp = ns_load_u32(header_buffer + 8);
     packet->header.body_len = ns_load_u32(header_buffer + 12);
 
-    if (packet->header.body_len > NS_PACKET_BODY_MAX) {
+    if(packet->header.body_len > NS_PACKET_BODY_MAX) {
         return -1;
     }
 
-    if (packet->header.body_len == 0) {
+    if(packet->header.body_len == 0) {
         packet->body[0] = '\0';
         return 1;
     }
@@ -523,7 +523,7 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     recv_status = ns_recv_all(socket_fd,
                               (unsigned char *) packet->body,
                               (size_t) packet->header.body_len);
-    if (recv_status <= 0) {
+    if(recv_status <= 0) {
         return recv_status;
     }
 
