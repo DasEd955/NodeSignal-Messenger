@@ -320,10 +320,51 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
     return buffer;
 }
 
-ns_socket_t ns_connect_tcp(const char *host,
-                           const char *port,
-                           char *error_buffer,
-                           size_t error_buffer_size) {
+// DEV NOTE: Consider splitting into helpers to improve readability
+/* ns_socket_t ns_connect_tcp -- Connects to a remote TCP server & returns the connected socket 
+
+    -- Acts as a communication function for creating an outgoing TCP client connection
+    -- Used by the client to connect to the server on the requested host & port
+    
+    -- const char *host: The hostname or IP address of the remote server
+    -- const char *port: The port number of the remote server
+    -- char *error_buffer: Buffer used to store a readable error message if the connection fails
+    -- size_t error_buffer_size: The size of the error_buffer in bytes
+    
+    -- Declares struct addrinfo hints to describe the type of socket addresses being requested
+    -- Declares struct addrinfo *results = NULL to store the linked list returned by getaddrinfo()
+    -- Declares struct addrinfo *candidate = NULL to iterate through each candidate address
+    -- Declares ns_socket_t socket_fd = NS_INVALID_SOCKET to store the connected socket
+    -- Declares int status = 0 to store the return value from getaddrinfo()
+
+    -- Clears hints with memset()
+    -- Configures hints for:
+        -- AF_UNSPEC so that either IPv4 or IPv6 may be used
+        -- SOCK_STREAM so that a TCP stream socket is requested
+        -- IPPROTO_TCP so that the TCP protocol is used
+
+    -- Calls getaddrinfo() to resolve host & port into candidate socket addresses
+    -- If getaddrinfo() fails:
+        -- If error_buffer is valid, writes a readable getaddrinfo() error message into it
+        -- Returns NS_INVALID_SOCKET
+
+    -- Loops through each candidate address returned by getaddrinfo()
+        -- Calls socket() to create a socket for the current candidate
+        -- If the socket is invalid, continues to the next candidate
+        -- Calls connect() to attempt a connection using the current candidate
+        -- If connect() succeeds, stop searching
+        -- If connect() fails:
+            -- Closes the socket
+            -- Resets socket_fd to NS_INVALID_SOCKET
+            -- Continues to the next candidate
+    
+    -- If no candidate produced a valid connected socket & error_buffer is valid:
+        -- Calls ns_last_error_string() to store a readable socket error message in error_buffer
+    
+    -- Calls freeaddrinfo() to release the candidate address list
+    -- Returns the connected socket on success or NS_INVALID_SOCKET on failure
+    */
+ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
     struct addrinfo *results = NULL;
     struct addrinfo *candidate = NULL;
@@ -369,10 +410,59 @@ ns_socket_t ns_connect_tcp(const char *host,
     return socket_fd;
 }
 
-ns_socket_t ns_listen_tcp(const char *port,
-                          int backlog,
-                          char *error_buffer,
-                          size_t error_buffer_size) {
+// DEV NOTE: Consider splitting into helpers to improve readability
+/* ns_socket_t ns_listen_tcp -- Creates a TCP listening socket on the given port 
+
+    -- Acts as a public communication function for creating a server listening socket
+    -- Used by the server to bind to a port & begin accepting incoming TCP connections
+    
+    -- const char *port: The port number the server should listen on
+    -- int backlog: The max number of pending connection requests
+    -- char *error_buffer: Buffer used the store a readable error message if socket setup fails
+    -- size_t error_buffer_size: The size of error_buffer in bytes
+
+    -- Declares struct addrinfo hints to describe the type of socket addresses being requested
+    -- Declares struct addrinfo *results = NULL to store the linked list returned by getaddrinfo()
+    -- Declares struct addrinfo *candidate = NULL to iterate through each candidate address
+    -- Declares ns_socket_t listen_socket = NS_INVALID_SOCKET to store the listening socket
+    -- Declares int status = 0 to store the return value from getaddrinfo()
+    -- Declares int reuse = 1 to enable address reuse on the listening socket
+    
+    -- Clears hints with memset()
+    -- Configures hints for:
+        -- AF_UNSPEC so either IPv4 or IPv6 may be used
+        -- SOCK_STREAM so a TCP stream socket is requested
+        -- IPPROTO_TCP so the TCP protocol is used
+        -- AI_PASSIVE so the address is suitable for bind()
+    
+    -- Calls getaddrinfo() to resolve the local port into candidate bind addresses
+    -- If getaddrinfo() fails:
+        -- If error_buffer is valid, writes a readable getaddrinfo() error message into it
+        -- Returns NS_INVALID_SOCKET
+
+    -- Loops through each candidate address returned by getaddrinfo()
+        -- Calls socket() to create a socket for the current candidate
+        -- If the socket is invalid, continues to the next candidate
+        -- Calls setsockopt() with SO_REUSEADDR to allow address reuse
+        -- Calls bind() to bind the socket to the current candidate address
+        -- If bind() fails:
+            -- Closes the socket
+            -- Resets listen_socket to NS_INVALID_SOCKET
+            -- Continues to the next candidate
+        -- Calls listen() to place the socket into listening mode
+        -- If listen() succeeds, stops searching
+        -- If listen() fails:
+            -- Closes the socket
+            -- Resets listen_socket to NS_INVALID_SOCKET
+            -- Continues to the next candidate
+    
+    -- If no candidate produced a valid listening socket & error_buffer is valid:
+        -- Calls ns_last_error_string() to store a readable socket error message in error_buffer
+    
+    -- Calls freeaddrinfo() to release the candidate address list
+    -- Returns the listening socket upon success or NS_INVALID_SOCKET upon failure
+    */
+ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
     struct addrinfo *results = NULL;
     struct addrinfo *candidate = NULL;
@@ -404,11 +494,7 @@ ns_socket_t ns_listen_tcp(const char *port,
             continue;
         }
 
-        setsockopt(listen_socket,
-                   SOL_SOCKET,
-                   SO_REUSEADDR,
-                   (const char *) &reuse,
-                   (ns_socklen_t) sizeof(reuse));
+        setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, (ns_socklen_t) sizeof(reuse));
 
         if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
             ns_socket_close(listen_socket);
