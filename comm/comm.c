@@ -432,11 +432,37 @@ ns_socket_t ns_listen_tcp(const char *port,
     return listen_socket;
 }
 
-int ns_packet_set(NsPacket *packet,
-                  uint8_t type,
-                  uint32_t sender_id,
-                  uint32_t timestamp,
-                  const char *body) {
+/* int ns_packet_set -- Initializes a packet with the given header value & body text
+
+    -- Acts as a public communication function for preparing a packet before it is sent across the network
+    -- Used to fill in packet header fields & safely copy the packet body text
+
+    -- NsPacket *packet: The packet structure to initialize
+    -- uint8_t type: The packet type to store in the header
+    -- uint32_t sender_id: The sender ID to store in the header
+    -- uint32_t timestamp: The Unix timestamp to store in the header
+    -- const char *body: The packet body text to copy into the packet
+    
+    -- Declares size_t body_length = 0 to store the length of the body text
+
+    -- If packet is NULL:
+        -- Returns -1
+    
+    -- If body is not NULL:
+        -- Calls strlen() to determine the body length
+        -- If body_length is greater than NS_PACKET_BODY_MAX:
+            -- Returns -1
+    
+    -- Clears the packet structure with memset()
+    -- Stores type, sender_id, timestamp, and body_length in the packet
+
+    -- If body_length is greater than 0:
+        -- Calls memcpy() to copy the body text into packet->body
+    
+    -- Writes a null terminator at packet->body[body_length]
+    -- Returns 0 upon success
+    */
+int ns_packet_set(NsPacket *packet, uint8_t type, uint32_t sender_id, uint32_t timestamp, const char *body) {
     size_t body_length = 0;
 
     if(packet == NULL) {
@@ -463,6 +489,37 @@ int ns_packet_set(NsPacket *packet,
     return 0;
 }
 
+/* int ns_send_packet -- Sends a complete packet over a socket connection 
+
+    -- Acts as a public communication function for transmitting a full protocol packet 
+    -- Used to send both the fixed-size packet header & the packet body across the network
+
+    -- ns_socket_t socket_fd: The socket used to send the packet
+    -- const NsPacket *packet: The packet structure containing the header fields & body text to send
+
+    -- Declares unsigned char header_buffer[NS_PACKET_HEADER_SIZE] to store the serialized packet header
+
+    -- If ns_socket_is_valid() reports that socket_fd is invalid or packet is NULL:
+        -- Returns -1 
+    
+    -- If packet->header.body_len is greater than NS_PACKET_BODY_MAX:
+        -- Returns -1
+    
+    -- Clears header_buffer with memset()
+    -- Stores the packet type in header_buffer[0]
+    -- Calls ns_store_u32() to serialize sender_id, timestamp, and body_len into the header buffer
+
+    -- Calls ns_send_all() to send the fixed-size header buffer
+    -- If sending the header fails:
+        -- Returns -1
+    
+    -- If packet->header.body_len is 0:
+        -- Returns 0 since there is no body to send
+    
+    -- Otherwise:
+        -- Calls ns_send_all() to send the pcket body
+        -- Returns the result of sending the body
+    */
 int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
 
@@ -487,11 +544,45 @@ int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
         return 0;
     }
 
-    return ns_send_all(socket_fd,
-                       (const unsigned char *) packet->body,
-                       (size_t) packet->header.body_len);
+    return ns_send_all(socket_fd, (const unsigned char *) packet->body, (size_t) packet->header.body_len);
 }
 
+/* int ns_recv_packet -- Receives a complete packet from a socket connection 
+
+    -- Acts as a public communication function for reading a full protocol packet from the network
+    -- Used to receive both the fixed-size packet header & the packet body from a socket
+
+    -- ns_socket_t socket_fd: The socket used to receive the packet
+    -- NsPacket *packet: The packet structure where the received header & body data will be stored
+
+    -- Declares unsigned char header_buffer[NS_PACKET_HEADER_SIZE] to store the raw received header bytes
+    -- Declares int recv_status = 0 to store the result returned by ns_recv_all()
+
+    -- If ns_socket_is_valid() reports that socket_fd is invalid or packet is NULL:
+        -- Returns -1
+    
+    -- Calls ns_recv_all() to read the fixed-size packet header into header_buffer
+    -- If ns_recv_all() returns 0 or -1:
+        -- Returns recv_status immediately 
+    
+    -- Clears the packet structure with memset()
+    -- Reads the packet type from header_buffer[0]
+    -- Calls ns_load_u32() to deserialize sender_id, timestamp, and body_len from the header_buffer
+
+    -- If packet->header.body_len is greater than NS_PACKET_BODY_MAX:
+        -- Returns -1
+    
+    -- If packet->header.body_len is 0:
+        -- Stores the null terminator in packet->body[0]
+        -- Returns 1
+    
+    -- Calls ns_recv_all() to read the packet body into packet->body
+    -- If ns_recv_all() returns 0 or -1:
+        -- Returns recv_status immediately
+    
+    -- Writes a null terminator at the end of the received body text
+    -- Returns 1 upon success
+    */
 int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
     int recv_status = 0;
@@ -520,9 +611,7 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
         return 1;
     }
 
-    recv_status = ns_recv_all(socket_fd,
-                              (unsigned char *) packet->body,
-                              (size_t) packet->header.body_len);
+    recv_status = ns_recv_all(socket_fd, (unsigned char *) packet->body, (size_t) packet->header.body_len);
     if(recv_status <= 0) {
         return recv_status;
     }
