@@ -150,6 +150,18 @@ static void ns_client_append_line(NsClientApp *app, const char *line) {
     gtk_text_view_scroll_mark_onscreen(app->transcript_view, gtk_text_buffer_get_insert(app->transcript_buffer));
 }
 
+/* static void ns_client_set_login_sensitive -- Enables or disables the login controls in the client UI
+
+    -- Acts as a helper function for changing whether the login related widgets can be edited or clicked
+    -- Used when the client connects or disconnects so the login form reflects the current state 
+
+    -- NsClientApp *app: The client application whose login widgets will be updated
+    -- gboolean sensitive: Whether the login widgets should be enabled or disabled
+
+    -- Calls gtk_widget_set_sensitive() on:
+        -- The server, port, and username entries
+        -- The connect button
+    */
 static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) {
     gtk_widget_set_sensitive(GTK_WIDGET(app->server_entry), sensitive);
     gtk_widget_set_sensitive(GTK_WIDGET(app->port_entry), sensitive);
@@ -157,6 +169,20 @@ static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) 
     gtk_widget_set_sensitive(GTK_WIDGET(app->connect_button), sensitive);
 }
 
+/* static void ns_client_join_receiver_thread -- Joins the background receiver thread if one is active
+
+    -- Acts as a helper function for cleaning up the client's receive thread
+    -- Used when the client disconnects or shuts down & must wait for the background thread to finish
+
+    -- NsClientApp *app: The client application whose receiver thread will be joind
+
+    -- Declares GThread *thread & stores app->receiver_thread in it 
+    -- If thread is NULL:
+        -- Returns immediately
+    
+    -- Sets app->receiver_thread to NULL
+    -- calls g_thread_join() to wait for the receiver thread to finish
+    */
 static void ns_client_join_receiver_thread(NsClientApp *app) {
     GThread *thread = app->receiver_thread;
 
@@ -168,9 +194,30 @@ static void ns_client_join_receiver_thread(NsClientApp *app) {
     g_thread_join(thread);
 }
 
-static ns_socket_t ns_client_take_socket(NsClientApp *app,
-                                         gboolean *was_joined,
-                                         uint32_t *user_id) {
+/* static ns_socket_t ns_client_take_socket -- Removes the active socket from the client state & resets connection fields
+
+    -- Acts as a helper function for safely taking ownership of the current socket while clearing the shared client state
+    -- Used when the client disconnects or shuts down & needs to detach the socket from the application state
+
+    -- NsClientApp *app: The client application whose socket & connection state will be updated
+    -- gboolean *was_joined: Optional output parameter that stores whether the client had joined the chat
+    -- uint32_t *user_id: Optional output parameter that stores the client's current user ID
+
+    -- Declares ns_socket_t socket_fd = NS_INVALID_SOCKET to store the socket taken from the client state
+
+    -- Locks app->connection_lock with g_mutex_lock()
+    -- Copies app->socket_fd into socket_fd
+    -- Sets app->socket_fd to NS_INVALID_SOCKET
+
+    -- If was_joined is not NULL:
+        -- Stores app->joined in *was_joined
+    
+    -- If user_id is not NULL:
+        -- Stores app->user_id in *user_id
+
+    -- Returns the socket that was removed from the client state
+    */
+static ns_socket_t ns_client_take_socket(NsClientApp *app, gboolean *was_joined, uint32_t *user_id) {
     ns_socket_t socket_fd = NS_INVALID_SOCKET;
 
     g_mutex_lock(&app->connection_lock);
