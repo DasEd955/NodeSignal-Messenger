@@ -1,3 +1,12 @@
+/* ===================================================================================
+client.c -- Implements the NodeSignal client application
+    -- Creates & manages the GTK user interface
+    -- Connects to the server over TCP
+    -- Sends & receives protocol packets
+    -- Updates the UI based on connection & chat events
+    -- Runs a background receive loop for incoming messages
+=================================================================================== */
+
 #include "client.h"
 
 #include "comm.h"
@@ -8,6 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* typedef enum NsUiEventType -- Represebnts the different types of UI events used by the client
+
+    -- NS_UI_APPEND_LINE: Appends a new line of text to the chat transcript
+    -- NS_UI_CONNECTED: Updates the UI after a successful connection & join
+    -- NS_UI_DISCONNECTED: Updates the UI after the client disconnects
+    -- NS_UI_STATUS: Updates the status label text in the client UI
+    */
 typedef enum NsUiEventType {
     NS_UI_APPEND_LINE = 1,
     NS_UI_CONNECTED = 2,
@@ -15,8 +31,19 @@ typedef enum NsUiEventType {
     NS_UI_STATUS = 4
 } NsUiEventType;
 
+/* typedef struct NsClientApp -- Forward declaration of the main client application structure
+
+    -- Allows the program to reference NsClientApp before its full structure definition appears later in the file
+    */
 typedef struct NsClientApp NsClientApp;
 
+/* typedef struct NsUiEvent -- Represents a UI event queued from background logic to the GTK main thread
+
+    -- NsClientApp *app: The client application instance associated with the event
+    -- NsUiEventType type: The type of UI event being queued
+    -- char *text: The text payload associated with the event
+    -- uint32_t user_id: The user ID associated with the event when needed
+    */
 typedef struct NsUiEvent {
     NsClientApp *app;
     NsUiEventType type;
@@ -24,6 +51,32 @@ typedef struct NsUiEvent {
     uint32_t user_id;
 } NsUiEvent;
 
+/* struct NsClientApp -- Represents the overall state of the client application
+
+    -- GtkApplication *application: The GTK application instance for the client
+    -- GtkWindow *window: The main application window
+    -- GtkStack *stack: The GTK stack used to switch between the login & chat pages
+    
+    -- GtkWidget *login_page: The login page shown before connecting
+    -- GtkWidget *chat_page: The chat page shown after connecting
+    -- GtkEntry *server_entry: The text entry for the server address
+    -- GtkEntry *port_entry: The text entry for the server port
+    -- GtkEntry *username_entry: The text entry for the username
+    -- GtkEntry *message_entry: The text entry for composing chat messages
+    -- GtkButton *connect_button: The button used to connect to the server
+    -- GtkButton *send_button: The button used to send a chat message
+    
+    -- GtkLabel *status_label: The label used to display connection or status messages
+    -- GtkTextView *transcript_view: The text view used to display the chat transcript
+    -- GtkTextBuffer *transcript_buffer: The text buffer backing the transcript view
+    
+    -- GMutex connection_lock: The mutex used to protect shared connection state
+    -- GThread *receiver_thread: The background thread used to receive incoming packets
+    -- ns_socket_t socket_fd: The socket connected to the server
+    -- gboolean transport_connected: Whether the TCP transport connection is active
+    -- gboolean joined: Whether the client has successfully joined the chat
+    -- uint32_t user_id: The user ID assigned by the server after joining
+    */
 struct NsClientApp {
     GtkApplication *application;
     GtkWindow *window;
@@ -47,10 +100,41 @@ struct NsClientApp {
     uint32_t user_id;
 };
 
+/* static void ns_client_set_status -- Updates the client's status label text
+
+    -- Acts as a helper function for displaying status messages in the UI
+    -- Used when the client needs to show connection, error, or general state messages
+
+    -- NsClientApp *app: The client application whose status label will be updated
+    -- const char *text: The status text to display
+
+    -- Calls gtk_label_set_text() to update the status label
+    -- If text is NULL, displays an empty string instead
+    */
 static void ns_client_set_status(NsClientApp *app, const char *text) {
     gtk_label_set_text(app->status_label, text != NULL ? text : "");
 }
 
+/* static void ns_client_append_line -- Appends a line of text to the chat transcript view
+
+    -- Acts as a helper function for adding new chat or status lines to the transcript
+    -- Used when the client needs to display incoming messages or local status updates
+
+    -- NsClientApp *app: The client application whose transcript will be added
+    -- const char *line: The line of text to append to the transcript
+
+    -- Declares GtkTextIter end to track the end position of the transcript buffer
+
+    -- If line is NULL or an empty string:
+        -- Returns immediately
+    
+    -- Calls gtk_text_buffer_get_end_iter() to move end to the end of the transcript
+    -- Calls gtk_text_buffer_insert() to append the given line
+    -- Calls gtk_text_buffer_insert() again to append a newline
+    -- Updates end to the new end of the transcript
+    -- Calls gtk_text_buffer_place_cursor() to move the text cursor to the end of transcript
+    -- Calls gtk_text_view_scroll_mark_onscreen() to keep the latest appended text visible
+    */
 static void ns_client_append_line(NsClientApp *app, const char *line) {
     GtkTextIter end;
 
@@ -63,8 +147,7 @@ static void ns_client_append_line(NsClientApp *app, const char *line) {
     gtk_text_buffer_insert(app->transcript_buffer, &end, "\n", 1);
     gtk_text_buffer_get_end_iter(app->transcript_buffer, &end);
     gtk_text_buffer_place_cursor(app->transcript_buffer, &end);
-    gtk_text_view_scroll_mark_onscreen(app->transcript_view,
-                                       gtk_text_buffer_get_insert(app->transcript_buffer));
+    gtk_text_view_scroll_mark_onscreen(app->transcript_view, gtk_text_buffer_get_insert(app->transcript_buffer));
 }
 
 static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) {
