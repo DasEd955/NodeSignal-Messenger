@@ -580,6 +580,62 @@ static void ns_client_on_message_entry_activate(GtkEntry *entry, gpointer user_d
     (void) entry;
 }
 
+/* DEV NOTE -- Consider Splitting into Helper Functions */
+/* static void ns_client_on_connect_clicked -- Handles the [Connect] button click & begins the client join flow
+
+    -- Acts as a GTK callback function for connecting the client to the server
+    -- Used when the user clicks the [Connect] button on the login page
+
+    -- GtkButton *button: The GTK button that triggered the callback
+    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
+
+    -- Casts user_data to NsClientApp *app
+    -- Reads the host, port, and username text from the login controls
+    -- Declares NsPacket join_packet to store the outgoing JOIN packet
+    -- Declares ns_socket_t socket_fd = NS_INVALID_SOCKET to store the connected socket
+    -- Declares error_buffer to store a readable connection error message
+
+    -- Casts button to void since it is not otherwise used
+
+    -- If host, port, or username is missing or empty:
+        -- Updates the status label with an input error message
+        -- Returns immediately
+    
+    -- If the username length is greater than NS_USERNAME_MAX:
+        -- Updates the status label with a username-length error
+        -- Returns immediately 
+    
+    -- Calls ns_connect_tcp() to connect to the server
+    -- If the socket is invalid:
+        -- Updates the status label with the connection error message
+        -- Returns immediately 
+    
+    -- Calls ns_packet_set() to build a JOIN packet using the entered username
+    -- If packet creation fails:
+        -- Closes the socket
+        -- Updates the status label with a username-length error
+        -- Returns immediately
+    
+    -- Locks app->connection_lock
+    -- Stores the new socket in app->socket_fd
+    -- Marks transport_connected as true
+    -- Resets joined to False
+    -- Resets user_id to 0U
+    -- Unlocks app->connection_lock
+
+    -- Disables the login controls
+    -- Disables the send button until the server ACK is received
+    -- Updates the status label to "Connecting..."
+
+    -- Calls ns_send_packet() to send the JOIN packet to the server
+    -- If sending fails:
+        -- Updates the status label with a send failure message
+        -- Calls ns_client_disconnect() without notifying the server
+        -- Re-enables the login controls
+        -- Returns immediately
+
+    -- Starts the background receiver thread with g_thread_new()
+    */
 static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
     const char *host = gtk_editable_get_text(GTK_EDITABLE(app->server_entry));
@@ -636,6 +692,19 @@ static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) 
     app->receiver_thread = g_thread_new("nodesignal-recv", ns_client_receive_loop, app);
 }
 
+/* static gboolean ns_client_on_close_request -- Handles the window close request by disconnecting the client 
+
+    -- Acts as a GTK callback function for the window close-request signal
+    -- Used when the user closes the application window
+
+    -- GtkWindow *window: The GTK window that triggered the callback
+    -- gpointer user_data: Pointer to the NsClientApp structure for running the client
+
+    -- Casts user_data to NsClientApp *app
+    -- Casts window to void since it is not otherwise used
+    -- Calls ns_client_disconnect() & requests that the server be notified
+    -- Returns FALSE so that GTK continues with the normal window close behavior
+    */
 static gboolean ns_client_on_close_request(GtkWindow *window, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -645,6 +714,21 @@ static gboolean ns_client_on_close_request(GtkWindow *window, gpointer user_data
     return FALSE;
 }
 
+/* static void ns_client_apply_css -- Loads & applies the client CSS stylesheet 
+
+    -- Acts as a helper function for applying custom visual styling to the GTK application
+    -- Used during client startup so that the UI uses the project's stylesheet
+
+    -- Declares GtkCssProvider *provider to load the CSS file
+    -- Declares GdkDisplay *display to access the current display
+
+    -- If display is NULL:
+        -- Release the CSS provider & returns immediately
+
+    -- Calls gtk_css_provider_load_from_path() to load the stylesheet from NS_ASSET_DIR "/style.css"
+    -- Calls gtk_style_context_add_provider_for_display() to apply the stylesheet to the display
+    -- Releases the CSS provider with g_object_unref()
+    */
 static void ns_client_apply_css(void) {
     GtkCssProvider *provider = gtk_css_provider_new();
     GdkDisplay *display = gdk_display_get_default();
@@ -655,12 +739,48 @@ static void ns_client_apply_css(void) {
     }
 
     gtk_css_provider_load_from_path(provider, NS_ASSET_DIR "/style.css");
-    gtk_style_context_add_provider_for_display(display,
-                                               GTK_STYLE_PROVIDER(provider),
-                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk_style_context_add_provider_for_display(display, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(provider);
 }
 
+/* static int ns_client_load_ui -- Loads the GTK UI from the builder file & initializes widget references
+
+    -- Acts as a helper function for constructing the client interface from client.ui
+    -- Used during client startup before the application window is shown
+
+    -- NsClientApp *app: The client application structure that will receive the loaded widget references
+
+    -- Declares GtkBuilder *builder and loads NS_ASSET_DIR "/client.ui"
+
+    -- Retrieves and stores pointers to:
+        -- The main window
+        -- The stack
+        -- The login page
+        -- The chat page
+        -- The server, port, username, and message entries
+        -- The connect and send buttons
+        -- The status label
+        -- The transcript view
+
+    -- If any required widget lookup fails:
+        -- Releases the builder
+        -- Returns -1
+    
+    -- Retrieves the transcript buffer from the transcript view
+    -- Associates the window with the GTK application
+    -- Shows the login page in the stack
+    -- Disables the send button initially
+    -- Sets the initial status message
+
+    -- Connects GTK signals for:
+        -- The connect button click
+        -- The send button click
+        -- The message entry activate event
+        -- The window close-request event
+    
+    -- Releases the builder
+    -- Returns 0 upon success
+    */
 static int ns_client_load_ui(NsClientApp *app) {
     GtkBuilder *builder = gtk_builder_new_from_file(NS_ASSET_DIR "/client.ui");
 
