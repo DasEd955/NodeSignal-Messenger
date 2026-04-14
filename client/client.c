@@ -821,6 +821,31 @@ static int ns_client_load_ui(NsClientApp *app) {
     return 0;
 }
 
+/* static void ns_client_on_activate -- Handles GTK application activation & shows the main client window 
+
+    -- Acts as a GTK callback function for the application's activate signal
+    -- Used when the client application starts or is activated again
+
+    -- GtkApplication *application: The GTK application instance being activated
+    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
+    
+    -- Casts user_data to NsClientApp *app
+
+    -- If app->window is already initialized:
+        -- Calls gtk_window_present() to bring the existing window to the front
+        -- Returns immediately
+    
+    -- Stores application in app->application
+    -- Calls ns_client_apply_css() to load & apply the client stylesheet
+
+    -- Calls ns_client_load_ui() to load the GTK UI
+    -- If UI loading fails:
+        -- Prints an error message to stderr
+        -- Calls g_application_quit() to shut down the application
+        -- Returns immediately
+    
+    -- Calls gtk_window_present() to show the main window
+    */
 static void ns_client_on_activate(GtkApplication *application, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -841,6 +866,18 @@ static void ns_client_on_activate(GtkApplication *application, gpointer user_dat
     gtk_window_present(app->window);
 }
 
+/* static void ns_client_on_shutdown -- Handles GTK application shutdown by disconnecting the client
+
+    -- Acts as a GTK callback function for the application's shutdown signal
+    -- Used when the client application is closing & must clean up the server connection
+
+    -- GApplication *application: The GTK application instance being shut down
+    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
+
+    -- Casts user_data to NsClientApp *app
+    -- Casts application to void since it is not otherwise used
+    -- Calls ns_client_disconnect() & requests that the server be notified 
+    */
 static void ns_client_on_shutdown(GApplication *application, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -848,20 +885,47 @@ static void ns_client_on_shutdown(GApplication *application, gpointer user_data)
     ns_client_disconnect(app, TRUE);
 }
 
+/* int ns_client_run -- Initializes & runs the NodeSignal client application
+
+    -- Acts as the main public entry point for starting the GTK client
+    -- Used to initialize client state, create the GTK application, connect lifestyle callbacks, and run the event loop
+
+    -- int argc: The number of CLI arguments passed to the program
+    -- int **argv: The array of CLI argument strings
+
+    -- Declares GtkApplication *application = NULL to store the GTK application object
+    -- Declares NsClientApp app to store the client application's runtime state
+    -- Declares int status = 0 to store the final application exit status
+
+    -- Clears app with memset()
+    -- Sets app.socket_fd to NS_INVALID_SOCKET
+    -- Initializes app.connection_lock with g_mutex_init()
+
+    -- Calls gtk_application_new() to create the GTK application
+    -- Uses the application ID "com.nodesignal.messenger"
+    -- Uses G_APPLICATION_NON_UNIQUE so that multiple instances may run concurrently
+
+    -- Connects the application's activate signal to ns_client_on_activate()
+    -- Connects the application's shutdown singal to ns_client_on_shutdown()
+
+    -- Calls g_application_run() to start the GTK event loop & stores the return value in status
+    -- Releases the GTK application with g_object_unref()
+    -- Clears app.connection_lock with g_mutex_clear()
+    -- Returns status 
+    */
 int ns_client_run(int argc, char **argv) {
     GtkApplication *application = NULL;
     NsClientApp app;
     int status = 0;
 
-    (void) argc;
+    (void) argc;    // DEV NOTE - These 2 lines may be unnecessary; test later
     (void) argv;
 
     memset(&app, 0, sizeof(app));
     app.socket_fd = NS_INVALID_SOCKET;
     g_mutex_init(&app.connection_lock);
 
-    application = gtk_application_new("com.nodesignal.messenger",
-                                      G_APPLICATION_NON_UNIQUE);
+    application = gtk_application_new("com.nodesignal.messenger", G_APPLICATION_NON_UNIQUE);
     g_signal_connect(application, "activate", G_CALLBACK(ns_client_on_activate), &app);
     g_signal_connect(application, "shutdown", G_CALLBACK(ns_client_on_shutdown), &app);
 
@@ -871,6 +935,29 @@ int ns_client_run(int argc, char **argv) {
     return status;
 }
 
+
+/* int main -- Entry point of the NodeSignal client program
+
+    -- Acts as the program's starting point
+    -- Used to initialize networking, run the client application, clean up networking resources, and return the final exit status
+
+    -- int argc: The number of CLI arguments passed to the program
+    -- int **argv: The array of CLI argument strings
+
+    -- Declares int net_status to store the result of network initialization
+    -- Declares int app_status = 0 to store the exit status returned by ns_client_run()
+
+    -- Calls ns_net_init() to initialize the networking subsystem
+    -- If network initialization fails:
+        -- Prints an error message to stderr 
+        -- Returns EXIT_FAILURE
+    
+    -- Calls ns_client_run() to start the client application
+    -- Stores the returned exit status in app_status
+
+    -- Calls ns_net_cleanup() to clean up networking resources
+    -- Retuns app_status
+    */
 int main(int argc, char **argv) {
     int net_status = ns_net_init();
     int app_status = 0;
