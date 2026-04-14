@@ -1,20 +1,34 @@
+# ===================================================================================
+# CMakeLists.txt -- Defines the CMake build configuration for NodeSignal Messenger
+#     -- Configures the C project and compiler settings
+#     -- Locates GTK4 and SQLite dependencies
+#     -- Builds the shared communication and database libraries
+#     -- Builds the server and client executables
+#     -- Copies client UI assets into the build output directory
+# ===================================================================================
+
 cmake_minimum_required(VERSION 3.21)
 
+# Project configuration for the NodeSignal Messenger build.
 project(NodeSignalMessenger VERSION 0.1.0 LANGUAGES C)
 
+# Require C17 and disable compiler-specific language extensions.
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+# Enable strict warning levels for MSVC and non-MSVC compilers.
 if(MSVC)
     add_compile_options(/W4 /permissive-)
 else()
     add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+# Locate pkg-config and use it to resolve the GTK4 dependency.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK4 REQUIRED IMPORTED_TARGET gtk4)
 
+# Prefer the CMake SQLite target when available, otherwise fall back to pkg-config.
 find_package(SQLite3 QUIET)
 if(NOT SQLite3_FOUND)
     pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
@@ -26,6 +40,7 @@ else()
     set(NS_SQLITE_TARGET PkgConfig::SQLITE3)
 endif()
 
+# Build the shared communication module used by both client and server.
 add_library(nodesignal_comm STATIC
     comm/comm.c
 )
@@ -34,6 +49,7 @@ target_include_directories(nodesignal_comm
         ${CMAKE_CURRENT_SOURCE_DIR}/comm
 )
 
+# Apply Windows-specific communication settings and link against Winsock.
 if(WIN32)
     target_compile_definitions(nodesignal_comm
         PUBLIC
@@ -43,6 +59,7 @@ if(WIN32)
     target_link_libraries(nodesignal_comm PUBLIC ws2_32)
 endif()
 
+# Build the database module and link it with the communication module and SQLite.
 add_library(nodesignal_db STATIC
     database/db.c
 )
@@ -56,6 +73,7 @@ target_link_libraries(nodesignal_db
         ${NS_SQLITE_TARGET}
 )
 
+# Build the server executable and provide access to its private module headers.
 add_executable(nodesignal_server
     server/server.c
 )
@@ -71,6 +89,7 @@ target_link_libraries(nodesignal_server
         nodesignal_db
 )
 
+# Build the GTK client executable and link it with the communication module and GTK4.
 add_executable(nodesignal_client
     client/client.c
 )
@@ -85,6 +104,7 @@ target_link_libraries(nodesignal_client
         PkgConfig::GTK4
 )
 
+# Copy the client UI assets into the build directory and expose their path to the client.
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/assets)
 configure_file(client/client.ui ${CMAKE_BINARY_DIR}/assets/client.ui COPYONLY)
 configure_file(client/style.css ${CMAKE_BINARY_DIR}/assets/style.css COPYONLY)
