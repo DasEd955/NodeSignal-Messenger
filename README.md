@@ -83,7 +83,7 @@ Dependencies:
 Configure and build:
 
 ```sh
-cmake -S . -B build -DCMAKE_C_COMPILER=gccv
+cmake -S . -B build -DCMAKE_C_COMPILER=gcc
 cmake --build build -j
 ```
 

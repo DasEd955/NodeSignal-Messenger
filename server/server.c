@@ -365,7 +365,8 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
 
     client->joined = true;
     client->user_id = user_id;
-    snprintf(client->username, sizeof(client->username), "%s", packet->body);
+    memcpy(client->username, packet->body, (size_t) packet->header.body_len);
+    client->username[packet->header.body_len] = '\0';
 
     snprintf(status_text, sizeof(status_text), "Connected as %s", client->username);
     if(ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
