@@ -78,13 +78,20 @@ Dependencies:
     sudo apt update
     sudo apt install build-essential cmake pkg-config libgtk-4-dev libsqlite3-dev
 
-## DEV-NOTE: Mount the repository into Virtual Machine
+Generated files in `build/` such as `Makefile` and `CMakeCache.txt` are machine-specific.
+If you move the repository to another machine or VM, configure it again in a fresh build directory.
 
 Configure and build:
 
 ```sh
-cmake -S . -B build -DCMAKE_C_COMPILER=gcc
+cmake -S . -B build
 cmake --build build -j
+```
+
+If you need to choose a specific compiler, pass it during configuration, for example:
+
+```sh
+cmake -S . -B build -DCMAKE_C_COMPILER=gcc
 ```
 
 The client UI assets are copied into `build/assets` during configuration.
