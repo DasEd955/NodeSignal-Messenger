@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.out
+*.a
+*.so
+
+# Executables
+*.exe
+
+# Version control
+.git/
+.gitignore
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
