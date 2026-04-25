@@ -111,3 +111,21 @@ Start one or more clients:
 ```
 
 On Windows, replace `./build/...` with the generated `.exe` path.
+
+## Docker
+
+(TODO ATM docker is able to build the project but because the project is written using absolute file paths instead of reletive 
+file paths it cannot be run intill C source files and CMAKE files are Rewritten to use reletive paths)
+
+Create a docker image:
+
+```sh
+docker build -t cmake-builder .
+```
+
+Create a docker image:
+
+```sh
+docker run --rm   -v "$(pwd):/app"   cmake-builder   bash -c "mkdir -p build && cd build && cmake .. && make"
+```
+    
