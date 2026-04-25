@@ -854,7 +854,8 @@ static int ns_client_load_ui(NsClientApp *app) {
     gtk_window_set_application(app->window, app->application);
     gtk_stack_set_visible_child(app->stack, app->login_page);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);
-    ns_client_set_status(app, "Enter a server and username to connect.");
+    // ns_client_set_status(app, "Enter a server and username to connect.");
+    ns_client_set_status(app, "");
 
     g_signal_connect(app->connect_button, "clicked", G_CALLBACK(ns_client_on_connect_clicked), app);
     g_signal_connect(app->send_button, "clicked", G_CALLBACK(ns_client_on_send_clicked), app);
