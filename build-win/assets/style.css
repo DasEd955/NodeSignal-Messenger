@@ -1,0 +1,38 @@
+window {
+    background: #10131a;
+    color: #e7ebf3;
+}
+
+headerbar {
+    background: #161b24;
+    color: #f5f7fb;
+    box-shadow: none;
+}
+
+frame {
+    border-radius: 18px;
+    background: #171c26;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+entry,
+textview {
+    background: #0f141d;
+    color: #edf2ff;
+    border-radius: 12px;
+}
+
+button {
+    background: #4c7dff;
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 10px 18px;
+}
+
+button:hover {
+    background: #6a93ff;
+}
+
+label.dim-label {
+    color: #b8c0d4;
+}

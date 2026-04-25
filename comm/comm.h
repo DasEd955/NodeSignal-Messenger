@@ -151,6 +151,16 @@ int ns_socket_is_valid(ns_socket_t socket_fd);
     */
 uint32_t ns_unix_time_now(void);
 
+/* int ns_get_executable_dir -- Retrieves the directory containing the current executable
+
+    -- char *buffer: The character buffer where the executable directory path will be written
+    -- size_t buffer_size: The size of buffer in bytes
+
+    -- Used when the program needs to load runtime assets relative to the executable location
+    -- Returns 0 on success or -1 on failure
+    */
+int ns_get_executable_dir(char *buffer, size_t buffer_size);
+
 /* const char *ns_last_error_string -- Retrieves the most recent system or socket error message as a string
 
     -- char *buffer: The character buffer where the error message will be written

@@ -719,9 +719,23 @@ int ns_server_run(const char *port, const char *database_path) {
     */
 int main(int argc, char **argv) {
     const char *port = "5555";
-    const char *database_path = "database/messages.db";
+    const char *database_path = NULL;
+    char default_database_path[1024];
+    char executable_dir[1024];
     int net_status = 0;
     int run_status = 0;
+
+    if(ns_get_executable_dir(executable_dir, sizeof(executable_dir)) == 0) {
+#ifdef _WIN32
+        snprintf(default_database_path, sizeof(default_database_path), "%s\\database\\messages.db", executable_dir);
+#else
+        snprintf(default_database_path, sizeof(default_database_path), "%s/database/messages.db", executable_dir);
+#endif
+        database_path = default_database_path;
+    }
+    else {
+        database_path = "database/messages.db";
+    }
 
     if(argc >= 2) {
         port = argv[1];

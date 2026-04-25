@@ -98,6 +98,7 @@ struct NsClientApp {
     gboolean transport_connected;
     gboolean joined;
     uint32_t user_id;
+    char *asset_dir;
 };
 
 /* static void ns_client_set_status -- Updates the client's status label text
@@ -113,6 +114,20 @@ struct NsClientApp {
     */
 static void ns_client_set_status(NsClientApp *app, const char *text) {
     gtk_label_set_text(app->status_label, text != NULL ? text : "");
+}
+
+/* static char *ns_client_build_asset_path -- Builds the absolute path to a runtime asset
+
+    -- Acts as a helper function for locating packaged client files relative to the executable
+    -- Used when the client needs to load client.ui or style.css from the installed assets directory
+
+    -- const NsClientApp *app: The client application containing the resolved asset directory
+    -- const char *filename: The asset file name to append to the asset directory
+
+    -- Calls g_build_filename() to construct and return the full asset path
+    */
+static char *ns_client_build_asset_path(const NsClientApp *app, const char *filename) {
+    return g_build_filename(app->asset_dir, filename, NULL);
 }
 
 /* static void ns_client_append_line -- Appends a line of text to the chat transcript view
@@ -714,22 +729,27 @@ static gboolean ns_client_on_close_request(GtkWindow *window, gpointer user_data
     return FALSE;
 }
 
-/* static void ns_client_apply_css -- Loads & applies the client CSS stylesheet 
+/* static void ns_client_apply_css -- Loads & applies the client CSS stylesheet
 
     -- Acts as a helper function for applying custom visual styling to the GTK application
     -- Used during client startup so that the UI uses the project's stylesheet
 
+    -- NsClientApp *app: The client application containing the resolved assets directory
     -- Declares GtkCssProvider *provider to load the CSS file
     -- Declares GdkDisplay *display to access the current display
+    -- Declares char *css_path to store the full path to the stylesheet
 
     -- If display is NULL:
         -- Release the CSS provider & returns immediately
 
-    -- Calls gtk_css_provider_load_from_path() to load the stylesheet from NS_ASSET_DIR "/style.css"
+    -- Calls ns_client_build_asset_path() to construct the full stylesheet path
+    -- Calls gtk_css_provider_load_from_path() to load the stylesheet from the packaged assets directory
     -- Calls gtk_style_context_add_provider_for_display() to apply the stylesheet to the display
+    -- Releases css_path with g_free()
     -- Releases the CSS provider with g_object_unref()
     */
-static void ns_client_apply_css(void) {
+static void ns_client_apply_css(NsClientApp *app) {
+    char *css_path = NULL;
     GtkCssProvider *provider = gtk_css_provider_new();
     GdkDisplay *display = gdk_display_get_default();
 
@@ -738,8 +758,15 @@ static void ns_client_apply_css(void) {
         return;
     }
 
-    gtk_css_provider_load_from_path(provider, NS_ASSET_DIR "/style.css");
+    if (app == NULL || app->asset_dir == NULL) {
+        g_object_unref(provider);
+        return;
+    }
+
+    css_path = ns_client_build_asset_path(app, "style.css");
+    gtk_css_provider_load_from_path(provider, css_path);
     gtk_style_context_add_provider_for_display(display, GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_free(css_path);
     g_object_unref(provider);
 }
 
@@ -750,7 +777,10 @@ static void ns_client_apply_css(void) {
 
     -- NsClientApp *app: The client application structure that will receive the loaded widget references
 
-    -- Declares GtkBuilder *builder and loads NS_ASSET_DIR "/client.ui"
+    -- Declares GtkBuilder *builder to load the UI definition
+    -- Declares char *ui_path to store the full path to client.ui
+    -- Calls ns_client_build_asset_path() to build the full UI file path
+    -- Calls gtk_builder_add_from_file() to load client.ui from the packaged assets directory
 
     -- Retrieves and stores pointers to:
         -- The main window
@@ -782,7 +812,21 @@ static void ns_client_apply_css(void) {
     -- Returns 0 upon success
     */
 static int ns_client_load_ui(NsClientApp *app) {
-    GtkBuilder *builder = gtk_builder_new_from_file(NS_ASSET_DIR "/client.ui");
+    char *ui_path = NULL;
+    GError *error = NULL;
+    GtkBuilder *builder = gtk_builder_new();
+
+    ui_path = ns_client_build_asset_path(app, "client.ui");
+    if(!gtk_builder_add_from_file(builder, ui_path, &error)) {
+        if(error != NULL) {
+            g_printerr("Failed to load UI file '%s': %s\n", ui_path, error->message);
+            g_clear_error(&error);
+        }
+        g_free(ui_path);
+        g_object_unref(builder);
+        return -1;
+    }
+    g_free(ui_path);
 
     app->window = GTK_WINDOW(gtk_builder_get_object(builder, "main_window"));
     app->stack = GTK_STACK(gtk_builder_get_object(builder, "main_stack"));
@@ -855,7 +899,7 @@ static void ns_client_on_activate(GtkApplication *application, gpointer user_dat
     }
 
     app->application = application;
-    ns_client_apply_css();
+    ns_client_apply_css(app);
 
     if (ns_client_load_ui(app) != 0) {
         g_printerr("Failed to load the GTK user interface.\n");
@@ -916,14 +960,16 @@ static void ns_client_on_shutdown(GApplication *application, gpointer user_data)
 int ns_client_run(int argc, char **argv) {
     GtkApplication *application = NULL;
     NsClientApp app;
+    char executable_dir[1024];
     int status = 0;
-
-    (void) argc;    // DEV NOTE - These 2 lines may be unnecessary; test later
-    (void) argv;
 
     memset(&app, 0, sizeof(app));
     app.socket_fd = NS_INVALID_SOCKET;
     g_mutex_init(&app.connection_lock);
+    if(ns_get_executable_dir(executable_dir, sizeof(executable_dir)) != 0) {
+        snprintf(executable_dir, sizeof(executable_dir), ".");
+    }
+    app.asset_dir = g_build_filename(executable_dir, "assets", NULL);
 
     application = gtk_application_new("com.nodesignal.messenger", G_APPLICATION_NON_UNIQUE);
     g_signal_connect(application, "activate", G_CALLBACK(ns_client_on_activate), &app);
@@ -931,6 +977,7 @@ int ns_client_run(int argc, char **argv) {
 
     status = g_application_run(G_APPLICATION(application), argc, argv);
     g_object_unref(application);
+    g_free(app.asset_dir);
     g_mutex_clear(&app.connection_lock);
     return status;
 }

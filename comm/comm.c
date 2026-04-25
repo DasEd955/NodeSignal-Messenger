@@ -14,7 +14,9 @@ comm.c -- Implements the shared networking & packet protocol logic
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <fcntl.h>
 #endif
 
@@ -276,6 +278,63 @@ uint32_t ns_unix_time_now(void) {
     return (uint32_t) now;
 }
 
+/* int ns_get_executable_dir -- Retrieves the directory containing the current executable
+
+    -- Acts as a public communication utility function for locating runtime files relative to the program
+    -- Used by the client and server when they need to load assets or database files from an installed package
+
+    -- char *buffer: The character buffer where the executable directory will be written
+    -- size_t buffer_size: The size of buffer in bytes
+
+    -- If buffer is NULL or buffer_size is 0:
+        -- Returns -1
+
+    -- On Windows:
+        -- Calls GetModuleFileNameA() to retrieve the full executable path
+    -- On Unix/Linux:
+        -- Calls readlink() on /proc/self/exe to retrieve the full executable path
+
+    -- Finds the last path separator in the executable path
+    -- Replaces that separator with a null terminator so buffer stores only the directory path
+    -- Returns 0 on success or -1 on failure
+    */
+int ns_get_executable_dir(char *buffer, size_t buffer_size) {
+    size_t index = 0;
+
+    if(buffer == NULL || buffer_size == 0) {
+        return -1;
+    }
+
+#ifdef _WIN32
+    {
+        DWORD length = GetModuleFileNameA(NULL, buffer, (DWORD) buffer_size);
+        if(length == 0 || (size_t) length >= buffer_size) {
+            buffer[0] = '\0';
+            return -1;
+        }
+    }
+#else
+    {
+        ssize_t length = readlink("/proc/self/exe", buffer, buffer_size - 1U);
+        if(length < 0 || (size_t) length >= buffer_size) {
+            buffer[0] = '\0';
+            return -1;
+        }
+        buffer[length] = '\0';
+    }
+#endif
+
+    for(index = strlen(buffer); index > 0; --index) {
+        if(buffer[index - 1U] == '/' || buffer[index - 1U] == '\\') {
+            buffer[index - 1U] = '\0';
+            return 0;
+        }
+    }
+
+    snprintf(buffer, buffer_size, ".");
+    return 0;
+}
+
 /* const char *ns_last_error_string -- Retrieves the most recent system or socket error message as readable text
 
     -- Acts as a public communication utility function for converting the latest error into a readable string
@@ -489,12 +548,22 @@ ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, siz
     }
 
     for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+        int dual_stack = 0;
+
         listen_socket = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
         if(!ns_socket_is_valid(listen_socket)) {
             continue;
         }
 
         setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, (ns_socklen_t) sizeof(reuse));
+
+#ifdef _WIN32
+        if(candidate->ai_family == AF_INET6) {
+            dual_stack = 0;
+            setsockopt(listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &dual_stack,
+                       (ns_socklen_t) sizeof(dual_stack));
+        }
+#endif
 
         if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
             ns_socket_close(listen_socket);

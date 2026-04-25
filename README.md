@@ -96,6 +96,29 @@ cmake -S . -B build -DCMAKE_C_COMPILER=gcc
 
 The client UI assets are copied into `build/assets` during configuration.
 
+## Package
+
+To create a portable install-style folder, run:
+
+```sh
+cmake --install build --prefix dist
+```
+
+This produces a layout like:
+
+```text
+dist/
+|-- bin/
+|   |-- nodesignal_client(.exe)
+|   |-- nodesignal_server(.exe)
+|   |-- assets/
+|   |   |-- client.ui
+|   |   `-- style.css
+|   `-- database/
+```
+
+On Windows, the install step also attempts to copy the runtime DLL dependencies needed by the executables into `dist/bin`.
+
 ## Run
 
 Start the server:
@@ -111,3 +134,12 @@ Start one or more clients:
 ```
 
 On Windows, replace `./build/...` with the generated `.exe` path.
+
+If you installed into `dist`, run the packaged binaries from `dist/bin`:
+
+```sh
+./dist/bin/nodesignal_server
+./dist/bin/nodesignal_client
+```
+
+The packaged server now defaults to `dist/bin/database/messages.db`, and the packaged client loads `assets/client.ui` and `assets/style.css` relative to its own executable directory.
