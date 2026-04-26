@@ -372,25 +372,51 @@ static void ns_client_queue_ui_event(NsClientApp *app, NsUiEventType type, const
 
     -- Calls ns_client_join_receiver_thread() to wait for the background receive thread to finish
     */
+/* Helper: optionally send LEAVE packet */
+static void ns_client_send_leave_if_needed(ns_socket_t socket_fd, gboolean notify_server, gboolean was_joined, uint32_t user_id) {
+    NsPacket leave_packet;
+
+    if (!notify_server || !was_joined) {
+        return;
+    }
+
+    if (ns_packet_set(&leave_packet,
+                      NS_PACKET_LEAVE,
+                      user_id,
+                      ns_unix_time_now(),
+                      "") == 0) {
+        (void) ns_send_packet(socket_fd, &leave_packet);
+    }
+}
+
+/* Helper: close socket safely */
+static void ns_client_close_socket(ns_socket_t socket_fd) {
+    if (!ns_socket_is_valid(socket_fd)) {
+        return;
+    }
+
+    ns_socket_shutdown(socket_fd);
+    ns_socket_close(socket_fd);
+}
+
+/* REPLACED FUNCTION */
 static void ns_client_disconnect(NsClientApp *app, gboolean notify_server) {
     gboolean was_joined = FALSE;
     uint32_t user_id = 0U;
-    ns_socket_t socket_fd = ns_client_take_socket(app, &was_joined, &user_id);
 
-    if (ns_socket_is_valid(socket_fd)) {
+    ns_socket_t socket_fd =
+        ns_client_take_socket(app, &was_joined, &user_id);
 
-        if (notify_server && was_joined) {
-            NsPacket leave_packet;
+    /* send leave if needed */
+    ns_client_send_leave_if_needed(socket_fd,
+                                  notify_server,
+                                  was_joined,
+                                  user_id);
 
-            if (ns_packet_set(&leave_packet, NS_PACKET_LEAVE, user_id, ns_unix_time_now(), "") == 0) {
-                (void) ns_send_packet(socket_fd, &leave_packet);
-            }
-        }
+    /* close socket */
+    ns_client_close_socket(socket_fd);
 
-        ns_socket_shutdown(socket_fd);
-        ns_socket_close(socket_fd);
-    }
-
+    /* wait for receiver thread */
     ns_client_join_receiver_thread(app);
 }
 
@@ -439,14 +465,62 @@ static void ns_client_disconnect(NsClientApp *app, gboolean notify_server) {
     -- Queues an NS_UI_DISCONNECTED even with the message "Disconnected from server."
     -- Returns NULL when the background thread finishes
     */
-static gpointer ns_client_receive_loop(gpointer data) {
-    NsClientApp *app = (NsClientApp *) data;
-    ns_socket_t socket_fd = NS_INVALID_SOCKET;
+/* Helper: handles a received packet */
+static void ns_client_handle_packet(NsClientApp *app, NsPacket *packet) {
     char line_buffer[NS_PACKET_BODY_MAX + 64U];
+
+    switch (packet->header.type) {
+        case NS_PACKET_ACK:
+            g_mutex_lock(&app->connection_lock);
+            app->joined = TRUE;
+            app->user_id = packet->header.sender_id;
+            g_mutex_unlock(&app->connection_lock);
+
+            ns_client_queue_ui_event(app, NS_UI_CONNECTED,
+                                    packet->body,
+                                    packet->header.sender_id);
+            break;
+
+        case NS_PACKET_JOIN:
+        case NS_PACKET_TEXT:
+        case NS_PACKET_LEAVE:
+            ns_client_queue_ui_event(app, NS_UI_APPEND_LINE,
+                                    packet->body,
+                                    packet->header.sender_id);
+            break;
+
+        case NS_PACKET_ERROR:
+            snprintf(line_buffer, sizeof(line_buffer),
+                     "Server error: %s", packet->body);
+
+            ns_client_queue_ui_event(app, NS_UI_APPEND_LINE, line_buffer, 0U);
+            ns_client_queue_ui_event(app, NS_UI_STATUS, packet->body, 0U);
+            break;
+
+        default:
+            ns_client_queue_ui_event(app,
+                                    NS_UI_APPEND_LINE,
+                                    "Received an unknown packet from the server.",
+                                    0U);
+            break;
+    }
+}
+
+/* Helper: safely fetch socket */
+static ns_socket_t ns_client_get_socket_copy(NsClientApp *app) {
+    ns_socket_t socket_fd;
 
     g_mutex_lock(&app->connection_lock);
     socket_fd = app->socket_fd;
     g_mutex_unlock(&app->connection_lock);
+
+    return socket_fd;
+}
+
+/* REPLACED FUNCTION */
+static gpointer ns_client_receive_loop(gpointer data) {
+    NsClientApp *app = (NsClientApp *) data;
+    ns_socket_t socket_fd = ns_client_get_socket_copy(app);
 
     while (ns_socket_is_valid(socket_fd)) {
         NsPacket packet;
@@ -456,40 +530,21 @@ static gpointer ns_client_receive_loop(gpointer data) {
             break;
         }
 
-        switch (packet.header.type) {
-            case NS_PACKET_ACK:
-                g_mutex_lock(&app->connection_lock);
-                app->joined = TRUE;
-                app->user_id = packet.header.sender_id;
-                g_mutex_unlock(&app->connection_lock);
-                ns_client_queue_ui_event(app, NS_UI_CONNECTED, packet.body, packet.header.sender_id);
-                break;
-
-            case NS_PACKET_JOIN:
-            case NS_PACKET_TEXT:
-            case NS_PACKET_LEAVE:
-                ns_client_queue_ui_event(app, NS_UI_APPEND_LINE, packet.body, packet.header.sender_id);
-                break;
-
-            case NS_PACKET_ERROR:
-                snprintf(line_buffer, sizeof(line_buffer), "Server error: %s", packet.body);
-                ns_client_queue_ui_event(app, NS_UI_APPEND_LINE, line_buffer, 0U);
-                ns_client_queue_ui_event(app, NS_UI_STATUS, packet.body, 0U);
-                break;
-
-            default:
-                ns_client_queue_ui_event(app, NS_UI_APPEND_LINE, "Received an unknown packet from the server.", 0U);
-                break;
-        }
+        ns_client_handle_packet(app, &packet);
     }
 
+    /* cleanup connection */
     socket_fd = ns_client_take_socket(app, NULL, NULL);
     if (ns_socket_is_valid(socket_fd)) {
         ns_socket_shutdown(socket_fd);
         ns_socket_close(socket_fd);
     }
 
-    ns_client_queue_ui_event(app, NS_UI_DISCONNECTED, "Disconnected from server.", 0U);
+    ns_client_queue_ui_event(app,
+                            NS_UI_DISCONNECTED,
+                            "Disconnected from server.",
+                            0U);
+
     return NULL;
 }
 
@@ -596,9 +651,6 @@ static void ns_client_on_message_entry_activate(GtkEntry *entry, gpointer user_d
 }
 
 /* DEV NOTE -- Consider Splitting into Helper Functions */
-//ex: ns_client_on_connect_clicked()
-//ns_client_receive_loop()
-//ns_client_load_ui()
 /* static void ns_client_on_connect_clicked -- Handles the [Connect] button click & begins the client join flow
 
     -- Acts as a GTK callback function for connecting the client to the server
@@ -654,52 +706,87 @@ static void ns_client_on_message_entry_activate(GtkEntry *entry, gpointer user_d
 
     -- Starts the background receiver thread with g_thread_new()
     */
-static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) {
-    NsClientApp *app = (NsClientApp *) user_data;
-    const char *host = gtk_editable_get_text(GTK_EDITABLE(app->server_entry));
-    const char *port = gtk_editable_get_text(GTK_EDITABLE(app->port_entry));
-    const char *username = gtk_editable_get_text(GTK_EDITABLE(app->username_entry));
-    NsPacket join_packet;
-    ns_socket_t socket_fd = NS_INVALID_SOCKET;
-    char error_buffer[256];
-
-    (void) button;
-
+/* Helper: validates login inputs */
+static gboolean ns_client_validate_login(NsClientApp *app,
+                                        const char *host,
+                                        const char *port,
+                                        const char *username) {
     if (host == NULL || host[0] == '\0' ||
         port == NULL || port[0] == '\0' ||
         username == NULL || username[0] == '\0') {
         ns_client_set_status(app, "Enter a host, port, and username.");
-        return;
+        return FALSE;
     }
 
     if (strlen(username) > NS_USERNAME_MAX) {
         ns_client_set_status(app, "Usernames must be 32 characters or fewer.");
-        return;
+        return FALSE;
     }
 
-    socket_fd = ns_connect_tcp(host, port, error_buffer, sizeof(error_buffer));
-    if (!ns_socket_is_valid(socket_fd)) {
-        ns_client_set_status(app, error_buffer);
-        return;
-    }
+    return TRUE;
+}
 
-    if (ns_packet_set(&join_packet, NS_PACKET_JOIN, 0U, ns_unix_time_now(), username) != 0) {
+/* Helper: creates JOIN packet */
+static int ns_client_build_join_packet(NsPacket *packet,
+                                       const char *username,
+                                       ns_socket_t socket_fd) {
+    if (ns_packet_set(packet, NS_PACKET_JOIN, 0U, ns_unix_time_now(), username) != 0) {
         ns_socket_close(socket_fd);
-        ns_client_set_status(app, "That username is too long.");
-        return;
+        return -1;
     }
+    return 0;
+}
 
+/* Helper: stores connection state safely */
+static void ns_client_store_connection(NsClientApp *app, ns_socket_t socket_fd) {
     g_mutex_lock(&app->connection_lock);
     app->socket_fd = socket_fd;
     app->transport_connected = TRUE;
     app->joined = FALSE;
     app->user_id = 0U;
     g_mutex_unlock(&app->connection_lock);
+}
 
+/* REPLACED FUNCTION */
+static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) {
+    NsClientApp *app = (NsClientApp *) user_data;
+    const char *host = gtk_editable_get_text(GTK_EDITABLE(app->server_entry));
+    const char *port = gtk_editable_get_text(GTK_EDITABLE(app->port_entry));
+    const char *username = gtk_editable_get_text(GTK_EDITABLE(app->username_entry));
+
+    NsPacket join_packet;
+    ns_socket_t socket_fd = NS_INVALID_SOCKET;
+    char error_buffer[256];
+
+    (void) button;
+
+    /* Step 1: validate input */
+    if (!ns_client_validate_login(app, host, port, username)) {
+        return;
+    }
+
+    /* Step 2: connect to server */
+    socket_fd = ns_connect_tcp(host, port, error_buffer, sizeof(error_buffer));
+    if (!ns_socket_is_valid(socket_fd)) {
+        ns_client_set_status(app, error_buffer);
+        return;
+    }
+
+    /* Step 3: build JOIN packet */
+    if (ns_client_build_join_packet(&join_packet, username, socket_fd) != 0) {
+        ns_client_set_status(app, "That username is too long.");
+        return;
+    }
+
+    /* Step 4: store state */
+    ns_client_store_connection(app, socket_fd);
+
+    /* Step 5: update UI to connecting state */
     ns_client_set_login_sensitive(app, FALSE);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);
     ns_client_set_status(app, "Connecting...");
 
+    /* Step 6: send JOIN */
     if (ns_send_packet(socket_fd, &join_packet) != 0) {
         ns_client_set_status(app, "Unable to send the join request.");
         ns_client_disconnect(app, FALSE);
@@ -707,7 +794,12 @@ static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) 
         return;
     }
 
-    app->receiver_thread = g_thread_new("nodesignal-recv", ns_client_receive_loop, app);
+    /* Step 7: start receiver thread */
+    app->receiver_thread = g_thread_new(
+        "nodesignal-recv",
+        ns_client_receive_loop,
+        app
+    );
 }
 
 /* static gboolean ns_client_on_close_request -- Handles the window close request by disconnecting the client 
