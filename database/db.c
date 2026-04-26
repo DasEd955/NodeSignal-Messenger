@@ -7,6 +7,8 @@ db.c -- Implements the SQLite database access logic
     -- Reports SQLite error messages
 =================================================================================== */
 
+
+// Implements the public database functions declared in db.h
 #include "db.h"
 
 #include <stdio.h>
