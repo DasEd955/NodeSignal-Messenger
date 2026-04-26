@@ -146,16 +146,13 @@ The packaged server now defaults to `dist/bin/database/messages.db`, and the pac
 
 ## Docker
 
-(TODO ATM docker is able to build the project but because the project is written using absolute file paths instead of reletive 
-file paths it cannot be run intill C source files and CMAKE files are Rewritten to use reletive paths)
-
 Create a docker image:
 
 ```sh
 docker build -t cmake-builder .
 ```
 
-Create a docker image:
+Build using docker:
 
 ```sh
 docker run --rm   -v "$(pwd):/app"   cmake-builder   bash -c "mkdir -p build && cd build && cmake .. && make"
