@@ -596,6 +596,9 @@ static void ns_client_on_message_entry_activate(GtkEntry *entry, gpointer user_d
 }
 
 /* DEV NOTE -- Consider Splitting into Helper Functions */
+//ex: ns_client_on_connect_clicked()
+//ns_client_receive_loop()
+//ns_client_load_ui()
 /* static void ns_client_on_connect_clicked -- Handles the [Connect] button click & begins the client join flow
 
     -- Acts as a GTK callback function for connecting the client to the server

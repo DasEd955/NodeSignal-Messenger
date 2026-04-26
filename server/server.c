@@ -290,6 +290,9 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
 }
 
 // DEV NOTE: Consider Splitting into ns_server_join_request() & ns_server_finalize_join()
+//ex: ns_server_handle_join()
+//ns_server_handle_text()
+//ns_server_run()
     // ns_server_join_request() -- Checks already joined, username length, and duplicate usernames
     // ns_server_finalize_join() -- Stores the client state, sends the ACK, broadcasts the join message
 
