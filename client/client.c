@@ -441,7 +441,10 @@ static void ns_client_close_socket(ns_socket_t socket_fd) {
     ns_socket_close(socket_fd);
 }
 
-/* static void ns_client_disconnect -- Disconnects the client from the server & cleans up connection state
+/* static void ns_client_disconnect -- Safely disconnects the client and resets connection state
+
+    -- Handles both voluntary disconnects and unexpected connection loss
+    -- Ensures the socket, receiver thread, and UI state are cleaned up properly
 
     -- Acts as a helper function for shutting down the current server connection
     -- Used when the client disconnects voluntarily, loses the connection, or shuts down
