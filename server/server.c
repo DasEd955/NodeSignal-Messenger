@@ -289,68 +289,70 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
     ns_server_reset_client(client);
 }
 
-// DEV NOTE: Consider Splitting into ns_server_join_request() & ns_server_finalize_join()
-    // ns_server_join_request() -- Checks already joined, username length, and duplicate usernames
-    // ns_server_finalize_join() -- Stores the client state, sends the ACK, broadcasts the join message
+/* static bool ns_server_join_validate -- Validates whether a client may join the chat
 
-/* static int ns_server_handle_join -- Processes a client's JOIN packet & completes the chat join flow
-    
-    -- Acts as a helper function for handling a client's request to join the chat
-    -- Used when the server receives an NS_PACKET_JOIN packet from a connected client
+    -- Acts as a helper function for checking JOIN request constraints before processing
+    -- Used to ensure the client is not already joined, the username is valid, and not already in use
 
-    -- NsServerState *server: The server state containing the database and client records
-    -- int client_index: The index of the client sending the join request
-    -- const NsPacket *packet: The received packet containing the requested username
+    -- NsServerState *server: The server state containing the client records
+    -- NsClient *client: The client attempting to join
+    -- const NsPacket *packet: The JOIN packet containing the requested username
 
-    -- Creates a pointer to the client record at client_index
-    -- Declares packets for:
-        -- The ACK response sent back to the joining client
-        -- The JOIN message broadcast to other connected clients
-    -- Declares text buffers for:
-        -- The connection status message
-        -- The join announcement message
-    -- Declares uint32_t user_id = 0U to store the user's database ID
+    -- If the client has already joined:
+        -- Sends an error packet & returns false
+    -- If the username length is invalid:
+        -- Sends an error packet & returns false
+    -- If the username is already in use:
+        -- Sends an error packet & returns false
 
-    -- If the client has already joined, sends an error & returns NS_HANDLE_DISCONNECT
-    -- If the username length is invalid, sends an error & returns NS_HANDLE_DISCONNECT
-    -- If the username is already active, sends an error & returns NS_HANDLE_DISCONNECT
-
-    -- Calls ns_db_get_or_create_user() to look up or create the user in the database
-    -- If the database operation fails:
-        -- Prints an error to stderr, sends an error packet to the client, and returns NS_HANDLE_DISCONNECT
-    
-    -- Marks the client as joined
-    -- Stores the user's database ID in client->user_id
-    -- Copies the username from the packer into client->username
-
-    -- Builds an ACK packet with a message like "Connected as <username>"
-        -- If building the ACK packet fails, return NS_HANDLE_DISCONNECT
-    -- Sends the ACK packet to the client
-        -- If sending the ACK packet fails, return NS_HANDLE_DISCONNECT
-
-    -- Builds a JOIN packet with a message like "* <username> has joined the chat"
-    -- If building the join packet succeeds, broadcasts it to connected clients
-
-    -- Prints a join message to the server console
-    -- Returns NS_HANDLE_OK upon success
+    -- Returns true if all validation checks pass
     */
-/* Split helpers for clarity */
 static bool ns_server_join_validate(NsServerState *server, NsClient *client, const NsPacket *packet) {
-    if (client->joined) {
+    if(client->joined) {
         ns_server_send_error(client, "This connection already joined the chat.");
         return false;
     }
-    if (packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
+    if(packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
         ns_server_send_error(client, "Usernames must be between 1 and 32 characters.");
         return false;
     }
-    if (ns_server_username_in_use(server, packet->body, (int)(client - server->clients))) {
+    if(ns_server_username_in_use(server, packet->body, (int)(client - server->clients))) {
         ns_server_send_error(client, "That username is already active.");
         return false;
     }
     return true;
 }
 
+/* static int ns_server_join_finalize -- Completes the client join process after validation
+
+    -- Acts as a helper function for finalizing a successful JOIN request
+    -- Used to register the user, update client state, and notify other clients
+
+    -- NsServerState *server: The server state containing the database and client records
+    -- NsClient *client: The client completing the join process
+    -- const NsPacket *packet: The JOIN packet containing the username
+
+    -- Declares ACK and JOIN packets for response and broadcast
+    -- Declares buffers for status and join messages
+    -- Declares user_id to store the database user ID
+
+    -- Calls ns_db_get_or_create_user() to register or fetch the user
+    -- If the database operation fails:
+        -- Prints an error, sends an error packet, and returns NS_HANDLE_DISCONNECT
+
+    -- Marks the client as joined
+    -- Stores the user ID and copies the username into the client record
+
+    -- Builds an ACK packet confirming the connection
+    -- Sends the ACK packet to the client
+        -- If sending fails, returns NS_HANDLE_DISCONNECT
+
+    -- Builds a JOIN broadcast message
+    -- If successful, sends it to all connected clients
+
+    -- Prints a join message to the server console
+    -- Returns NS_HANDLE_OK upon success
+    */
 static int ns_server_join_finalize(NsServerState *server, NsClient *client, const NsPacket *packet) {
     NsPacket ack_packet;
     NsPacket join_packet;
@@ -358,10 +360,8 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
     char join_text[NS_PACKET_BODY_MAX + 1U];
     uint32_t user_id = 0U;
 
-    if (ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
-        fprintf(stderr, "Failed to create user '%s': %s\n",
-                packet->body,
-                ns_db_last_error(&server->database));
+    if(ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
+        fprintf(stderr, "Failed to create user '%s': %s\n", packet->body, ns_db_last_error(&server->database));
         ns_server_send_error(client, "The server could not register that username.");
         return NS_HANDLE_DISCONNECT;
     }
@@ -372,7 +372,7 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
     client->username[packet->header.body_len] = '\0';
 
     snprintf(status_text, sizeof(status_text), "Connected as %s", client->username);
-    if (ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
+    if(ns_packet_set(&ack_packet, NS_PACKET_ACK, user_id, ns_unix_time_now(), status_text) != 0) {
         return NS_HANDLE_DISCONNECT;
     }
 
@@ -381,7 +381,7 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
     }
 
     snprintf(join_text, sizeof(join_text), "* %s joined the chat", client->username);
-    if (ns_packet_set(&join_packet, NS_PACKET_JOIN, user_id, ns_unix_time_now(), join_text) == 0) {
+    if(ns_packet_set(&join_packet, NS_PACKET_JOIN, user_id, ns_unix_time_now(), join_text) == 0) {
         ns_server_broadcast(server, &join_packet, -1);
     }
 
@@ -389,11 +389,38 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
     return NS_HANDLE_OK;
 }
 
-/* REPLACEMENT FUNCTION */
+/* static int ns_server_handle_join -- Processes a client's JOIN packet by delegating validation & finalization steps
+    
+    -- Acts as the primary handler for JOIN packets received from clients
+    -- Used when the server receives an NS_PACKET_JOIN packet and needs to complete the join workflow
+
+    -- NsServerState *server: The server state containing client records and database access
+    -- int client_index: The index of the client attempting to join
+    -- const NsPacket *packet: The received packet containing the requested username
+
+    -- Creates a pointer to the client record at client_index
+
+    -- Calls ns_server_join_validate() to verify:
+        -- The client has not already joined
+        -- The username length is valid
+        -- The username is not already in use
+    -- If validation fails:
+        -- Returns NS_HANDLE_DISCONNECT to indicate the client should be disconnected
+
+    -- Calls ns_server_join_finalize() to:
+        -- Register or retrieve the user from the database
+        -- Store client state (joined, user_id, username)
+        -- Send an ACK packet to the client
+        -- Broadcast a JOIN message to other clients
+
+    -- Returns the result of ns_server_join_finalize()
+        -- NS_HANDLE_OK on success
+        -- NS_HANDLE_DISCONNECT on failure
+    */
 static int ns_server_handle_join(NsServerState *server, int client_index, const NsPacket *packet) {
     NsClient *client = &server->clients[client_index];
 
-    if (!ns_server_join_validate(server, client, packet)) {
+    if(!ns_server_join_validate(server, client, packet)) {
         return NS_HANDLE_DISCONNECT;
     }
 
@@ -610,10 +637,25 @@ static void ns_server_accept_client(NsServerState *server) {
         -- Returns EXIT_FAILURE
     */
 
+/* static void ns_server_build_read_set -- Builds the file descriptor set for select()
 
-static void ns_server_build_read_set(NsServerState *server,
-                                    fd_set *read_set,
-                                    ns_socket_t *max_socket) {
+    -- Acts as a helper function for preparing the set of sockets to monitor for incoming data
+    -- Used before calling select() to track the listening socket and all active client sockets
+
+    -- NsServerState *server: The server state containing the listening socket and clients
+    -- fd_set *read_set: The set of file descriptors to populate
+    -- ns_socket_t *max_socket: Output parameter storing the highest socket value
+
+    -- Clears the read_set using FD_ZERO()
+    -- Adds the listening socket to the set
+    -- Initializes max_socket with the listening socket
+
+    -- Loops through all client slots:
+        -- Skips inactive clients
+        -- Adds each active client socket to read_set
+        -- Updates max_socket if a higher socket value is found
+    */
+static void ns_server_build_read_set(NsServerState *server, fd_set *read_set, ns_socket_t *max_socket) {
     int index = 0;
 
     FD_ZERO(read_set);
@@ -621,51 +663,86 @@ static void ns_server_build_read_set(NsServerState *server,
     FD_SET(server->listen_socket, read_set);
     *max_socket = server->listen_socket;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
         NsClient *client = &server->clients[index];
 
-        if (!client->active) {
+        if(!client->active) {
             continue;
         }
 
         FD_SET(client->socket_fd, read_set);
 
-        if (client->socket_fd > *max_socket) {
+        if(client->socket_fd > *max_socket) {
             *max_socket = client->socket_fd;
         }
     }
 }
 
+/* static void ns_server_process_new_connection -- Handles readiness of the listening socket
+
+    -- Acts as a helper function for processing new incoming client connections
+    -- Used when select() indicates the listening socket is ready to accept a connection
+
+    -- NsServerState *server: The server state containing the listening socket
+
+    -- Calls ns_server_accept_client() to accept and register the new client
+    */
 static void ns_server_process_new_connection(NsServerState *server) {
     ns_server_accept_client(server);
 }
 
-static void ns_server_handle_client_packet(NsServerState *server,
-                                           int index,
-                                           NsClient *client,
-                                           fd_set *read_set) {
+/* static void ns_server_handle_client_packet -- Processes a single client's incoming packet
+
+    -- Acts as a helper function for receiving and handling packets from a specific client
+    -- Used during the main server loop when a client socket is ready for reading
+
+    -- NsServerState *server: The server state containing client records
+    -- int index: The index of the client in the client array
+    -- NsClient *client: The client being processed
+    -- fd_set *read_set: The set of sockets ready for reading
+
+    -- If the client is inactive or its socket is not set in read_set:
+        -- Returns immediately
+
+    -- Calls ns_recv_packet() to receive the next packet
+    -- If receiving fails:
+        -- Disconnects the client and returns
+
+    -- Checks packet type and dispatches accordingly:
+        -- NS_PACKET_JOIN:
+            -- Calls ns_server_handle_join()
+            -- Disconnects client on failure
+        -- NS_PACKET_TEXT:
+            -- Calls ns_server_handle_text()
+            -- Disconnects client on failure
+        -- NS_PACKET_LEAVE:
+            -- Disconnects client and announces leave
+        -- default:
+            -- Sends error and disconnects client
+    */
+static void ns_server_handle_client_packet(NsServerState *server, int index, NsClient *client, fd_set *read_set) {
     NsPacket packet;
     int receive_result = 0;
 
-    if (!client->active || !FD_ISSET(client->socket_fd, read_set)) {
+    if(!client->active || !FD_ISSET(client->socket_fd, read_set)) {
         return;
     }
 
     receive_result = ns_recv_packet(client->socket_fd, &packet);
-    if (receive_result <= 0) {
+    if(receive_result <= 0) {
         ns_server_disconnect_client(server, index, client->joined);
         return;
     }
 
-    switch (packet.header.type) {
+    switch(packet.header.type) {
         case NS_PACKET_JOIN:
-            if (ns_server_handle_join(server, index, &packet) != NS_HANDLE_OK) {
+            if(ns_server_handle_join(server, index, &packet) != NS_HANDLE_OK) {
                 ns_server_disconnect_client(server, index, false);
             }
             break;
 
         case NS_PACKET_TEXT:
-            if (ns_server_handle_text(server, index, &packet) != NS_HANDLE_OK) {
+            if(ns_server_handle_text(server, index, &packet) != NS_HANDLE_OK) {
                 ns_server_disconnect_client(server, index, false);
             }
             break;
@@ -681,13 +758,25 @@ static void ns_server_handle_client_packet(NsServerState *server,
     }
 }
 
+/* static void ns_server_process_clients -- Iterates through clients and processes ready sockets
+
+    -- Acts as a helper function for handling all client activity after select()
+    -- Used to process incoming packets from each active client
+
+    -- NsServerState *server: The server state containing client records
+    -- fd_set *read_set: The set of sockets ready for reading
+
+    -- Loops through all client slots:
+        -- Skips inactive clients
+        -- Calls ns_server_handle_client_packet() for each active client
+    */
 static void ns_server_process_clients(NsServerState *server, fd_set *read_set) {
     int index = 0;
 
-    for (index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < FD_SETSIZE; ++index) {
         NsClient *client = &server->clients[index];
 
-        if (!client->active) {
+        if(!client->active) {
             continue;
         }
 
@@ -695,27 +784,90 @@ static void ns_server_process_clients(NsServerState *server, fd_set *read_set) {
     }
 }
 
+/* int ns_server_run -- Starts the NodeSignal Server & runs the main event loop
+    
+    -- Acts as the main entry point for running the NodeSignal server
+    -- Used to initialize server state, open the database, start listening for clients, and process network events
 
+    -- const char *port: The port number the server should listen on
+    -- const char *database_path: The path to the SQLite database file
 
+    -- Declares NsServerState server to store the server's runtime state
+    -- Declares error_buffer to store readable socket error messages
+
+    -- Calls ns_server_init() to initialize the server state to default values
+
+    -- Calls ns_db_open() to open the database at database_path
+        -- If opening fails:
+            -- Prints an error to stderr
+            -- Returns EXIT_FAILURE
+
+    -- Calls ns_db_init_schema() to ensure required database tables exist
+        -- If initialization fails:
+            -- Prints an error to stderr
+            -- Closes the database
+            -- Returns EXIT_FAILURE
+
+    -- Calls ns_listen_tcp() to create and bind the listening socket
+        -- Uses a backlog of 16 pending connections
+        -- If socket creation fails:
+            -- Prints an error message including the socket error text
+            -- Closes the database
+            -- Returns EXIT_FAILURE
+
+    -- Prints startup messages showing the active port and database path
+
+    -- Enters an infinite server loop
+        -- Declares fd_set read_set to track sockets ready for reading
+        -- Declares max_socket to store the highest socket descriptor
+        -- Declares select_result to store the result of select()
+
+        -- Calls ns_server_build_read_set() to:
+            -- Initialize read_set
+            -- Add the listening socket
+            -- Add all active client sockets
+            -- Determine the maximum socket value
+
+        -- Calls select() to wait for activity on any socket
+            -- If select() fails:
+                -- Retrieves the error string
+                -- Prints the error to stderr
+                -- Breaks out of the server loop
+
+        -- If the listening socket is ready:
+            -- Calls ns_server_process_new_connection() to accept a new client
+
+        -- Calls ns_server_process_clients() to:
+            -- Iterate through all active clients
+            -- Receive packets from ready sockets
+            -- Dispatch packets to the appropriate handlers
+            -- Disconnect clients when necessary
+
+    -- After exiting the loop:
+        -- Shuts down and closes the listening socket
+        -- Closes the database
+
+    -- Returns EXIT_FAILURE to indicate the server terminated due to an error
+*/
 int ns_server_run(const char *port, const char *database_path) {
     NsServerState server;
     char error_buffer[256];
 
     ns_server_init(&server);
 
-    if (ns_db_open(&server.database, database_path) != 0) {
+    if(ns_db_open(&server.database, database_path) != 0) {
         fprintf(stderr, "Unable to open database '%s'.\n", database_path);
         return EXIT_FAILURE;
     }
 
-    if (ns_db_init_schema(&server.database) != 0) {
+    if(ns_db_init_schema(&server.database) != 0) {
         fprintf(stderr, "Unable to initialize database schema.\n");
         ns_db_close(&server.database);
         return EXIT_FAILURE;
     }
 
     server.listen_socket = ns_listen_tcp(port, 16, error_buffer, sizeof(error_buffer));
-    if (!ns_socket_is_valid(server.listen_socket)) {
+    if(!ns_socket_is_valid(server.listen_socket)) {
         fprintf(stderr, "Unable to start server on port %s: %s\n", port, error_buffer);
         ns_db_close(&server.database);
         return EXIT_FAILURE;
@@ -724,7 +876,7 @@ int ns_server_run(const char *port, const char *database_path) {
     printf("NodeSignal Server listening on port %s\n", port);
     printf("Using database at %s\n", database_path);
 
-    for (;;) {
+    for(;;) {
         fd_set read_set;
         ns_socket_t max_socket = 0;
         int select_result = 0;
@@ -732,13 +884,13 @@ int ns_server_run(const char *port, const char *database_path) {
         ns_server_build_read_set(&server, &read_set, &max_socket);
 
         select_result = select((int)max_socket + 1, &read_set, NULL, NULL, NULL);
-        if (select_result < 0) {
+        if(select_result < 0) {
             ns_last_error_string(error_buffer, sizeof(error_buffer));
             fprintf(stderr, "select() failed: %s\n", error_buffer);
             break;
         }
 
-        if (FD_ISSET(server.listen_socket, &read_set)) {
+        if(FD_ISSET(server.listen_socket, &read_set)) {
             ns_server_process_new_connection(&server);
         }
 
