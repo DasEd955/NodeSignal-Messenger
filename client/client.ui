@@ -87,6 +87,7 @@
                     <child>
                       <object class="GtkEntry" id="username_entry">
                         <property name="placeholder-text">Username</property>
+                        <property name="css-classes">username</property>
                         <property name="max-length">32</property>
                       </object>
                     </child>

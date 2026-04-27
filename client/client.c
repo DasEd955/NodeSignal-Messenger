@@ -92,6 +92,7 @@ struct NsClientApp {
     GtkLabel *status_label;
     GtkTextView *transcript_view;
     GtkTextBuffer *transcript_buffer;
+    GtkTextTag *username_tag;
     GMutex connection_lock;
     GThread *receiver_thread;
     ns_socket_t socket_fd;
@@ -183,11 +184,25 @@ static void ns_client_append_line(NsClientApp *app, const char *line) {
     }
 
     gtk_text_buffer_get_end_iter(app->transcript_buffer, &end);
-    gtk_text_buffer_insert(app->transcript_buffer, &end, line, -1);
+    const char *colon = strchr(line, ':');
+
+    if(colon != NULL && colon != line) {
+        size_t name_len = (size_t)(colon - line);
+
+        if(app->username_tag != NULL && name_len > 0) {
+            gtk_text_buffer_insert_with_tags(app->transcript_buffer, &end, line, (gssize) name_len, app->username_tag, NULL);
+        } else {
+            gtk_text_buffer_insert(app->transcript_buffer, &end, line, (gssize) name_len);
+        }
+        gtk_text_buffer_insert(app->transcript_buffer, &end, colon, -1);
+
+    } else {
+        gtk_text_buffer_insert(app->transcript_buffer, &end, line, -1);
+    }
+
     gtk_text_buffer_insert(app->transcript_buffer, &end, "\n", 1);
     gtk_text_buffer_get_end_iter(app->transcript_buffer, &end);
     gtk_text_buffer_place_cursor(app->transcript_buffer, &end);
-    //gtk_text_view_scroll_mark_onscreen(app->transcript_view, gtk_text_buffer_get_insert(app->transcript_buffer));
     g_idle_add(ns_client_scroll_to_bottom, app);
 }
 
@@ -972,6 +987,7 @@ static int ns_client_load_ui(NsClientApp *app) {
     }
 
     app->transcript_buffer = gtk_text_view_get_buffer(app->transcript_view);
+    app->username_tag = gtk_text_buffer_create_tag(app->transcript_buffer, "username", "weight", PANGO_WEIGHT_BOLD, NULL);
     gtk_window_set_application(app->window, app->application);
     gtk_stack_set_visible_child(app->stack, app->login_page);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);
