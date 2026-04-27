@@ -447,9 +447,10 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
     -- If the incoming message body is empty:
         -- Sends an error packet to the client & returns NS_HANDLE_OK since the client should remain connected
     
-    -- Builds display_text in the format "<username>: <message>"
-    -- If snprintf() fails or the formatted message is too long:
-        -- Sends an error packet to the client & returns NS_HANDLE_OK since the client should remain connected
+    -- Calls ns_server_build_display_text() to format the message as "<username>: <message>"
+-- If formatting fails:
+    -- Sends an error packet to the client
+    -- Returns NS_HANDLE_OK since the client should remain connected
     
     -- Calls ns_db_insert_message() to store the message in the database
     -- If the database insert fails:
