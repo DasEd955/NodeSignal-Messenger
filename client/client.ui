@@ -132,6 +132,7 @@
                 </child>
 
                 <!-- macOS-style floating input bar -->
+                <!-- spacing -->
                 <child>
                   <object class="GtkBox">
                     <property name="orientation">horizontal</property>
