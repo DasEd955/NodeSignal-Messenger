@@ -17,7 +17,10 @@ client.c -- Implements the NodeSignal client application
 #include <stdlib.h>
 #include <string.h>
 
-/* typedef enum NsUiEventType -- Represebnts the different types of UI events used by the client
+/* typedef enum NsUiEventType -- Represents the different types of UI events used by the client
+
+    -- Defines the event types queued from background networking logic
+    -- Used so UI updates can safely run on the GTK main thread
 
     -- NS_UI_APPEND_LINE: Appends a new line of text to the chat transcript
     -- NS_UI_CONNECTED: Updates the UI after a successful connection & join
