@@ -907,31 +907,48 @@ int ns_server_run(const char *port, const char *database_path) {
 /* int main -- Entry point of the NodeSignal Server program
      
     -- Acts as the program's starting point
-    -- Used to read optional CLI arguments, initialize networking, run the server, and clean up networking before exiting
+    -- Used to resolve the database path, read optional CLI arguments, initialize networking, run the server, and clean up before exiting
     
     -- int argc: The number of CLI arguments passed to the program
     -- char **argv: The array of CLI argument strings
 
     -- Declares port & initializes it to the default port "5555"
-    -- Declares database_path & initializes it to the default database path "database/messages.db"
-    -- Declares net_status = 0 to store the result of network initialization
-    -- Declares run_status = 0 to store the return value from ns_server_run()
+    -- Declares database_path pointer for the resolved database location
+    -- Declares default_database_path buffer to store a constructed database path
+    -- Declares executable_dir buffer to store the directory of the running executable
+    -- Declares net_status to store the result of network initialization
+    -- Declares run_status to store the return value from ns_server_run()
+
+    -- Calls ns_get_executable_dir() to determine the directory of the running executable
+        -- If successful:
+            -- Constructs a default database path relative to the executable directory
+            -- On Windows:
+                -- Uses suffix "\\database\\messages.db"
+            -- On Unix/Linux:
+                -- Uses suffix "/database/messages.db"
+            -- Calculates max_exec to ensure the combined path will not exceed buffer size
+            -- Calls snprintf() with precision specifier %.*s to safely truncate executable_dir if needed
+            -- Stores the resulting path in default_database_path
+            -- Sets database_path to default_database_path
+        -- If retrieval fails:
+            -- Falls back to "database/messages.db"
 
     -- If argc >= 2:
         -- Uses argv[1] as the port number instead of the default port
     -- If argc >= 3:
-        -- Uses argv[2] as the database path instead of the default path
+        -- Uses argv[2] as the database path instead of the resolved/default path
     
     -- Calls ns_net_init() to initialize the networking layer
     -- If network initialization fails:
-        -- Prints an error message to stderr & returns EXIT_FAILURE
+        -- Prints an error message to stderr
+        -- Returns EXIT_FAILURE
     
-    -- Calls ns_server_run() to start & run the server
+    -- Calls ns_server_run() to start & run the server using the resolved port and database path
     -- Stores the return value in run_status
 
-    -- Calls ns_net_cleanup() to clean up networking resources
+    -- Calls ns_net_cleanup() to release networking resources
     -- Returns run_status as the program's final exit code
-    */
+*/
 int main(int argc, char **argv) {
     const char *port = "5555";
     const char *database_path = NULL;
