@@ -440,7 +440,7 @@ static int ns_server_handle_join(NsServerState *server, int client_index, const 
     -- Declares NsPacket broadcast_packet to store the outgoing text packet 
     -- Declares display_text to store the formatted message shown to clients
     -- Declares timestamp to store the current Unix time for the message
-    -- Declares display_length = 0 to store the length returned by snprintf()
+    -- Uses ns_server_build_display_text() to safely format the outgoing message
 
     -- If the client has not joined yet:
         -- Sends an an error packet to the client & returns NS_HANDLE_DISCONNECT
