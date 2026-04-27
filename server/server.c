@@ -940,14 +940,24 @@ int main(int argc, char **argv) {
     int net_status = 0;
     int run_status = 0;
 
-    if(ns_get_executable_dir(executable_dir, sizeof(executable_dir)) == 0) {
-#ifdef _WIN32
-        snprintf(default_database_path, sizeof(default_database_path), "%s\\database\\messages.db", executable_dir);
-#else
-        snprintf(default_database_path, sizeof(default_database_path), "%s/database/messages.db", executable_dir);
-#endif
+        if(ns_get_executable_dir(executable_dir, sizeof(executable_dir)) == 0) {
+    #ifdef _WIN32
+        {
+            const char *suffix = "\\database\\messages.db";
+            int max_exec = (int)(sizeof(default_database_path) - strlen(suffix) - 1);
+            if(max_exec < 0) max_exec = 0;
+            snprintf(default_database_path, sizeof(default_database_path), "%.*s%s", max_exec, executable_dir, suffix);
+        }
+    #else
+        {
+            const char *suffix = "/database/messages.db";
+            int max_exec = (int)(sizeof(default_database_path) - strlen(suffix) - 1);
+            if(max_exec < 0) max_exec = 0;
+            snprintf(default_database_path, sizeof(default_database_path), "%.*s%s", max_exec, executable_dir, suffix);
+        }
+    #endif
         database_path = default_database_path;
-    }
+        }
     else {
         database_path = "database/messages.db";
     }

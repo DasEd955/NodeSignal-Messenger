@@ -380,6 +380,66 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
 }
 
 // DEV NOTE: Consider splitting into helpers to improve readability
+static ns_socket_t ns_try_connect_addrinfo(struct addrinfo *results) {
+    struct addrinfo *candidate = NULL;
+    ns_socket_t socket_fd = NS_INVALID_SOCKET;
+
+    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+        socket_fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        if(!ns_socket_is_valid(socket_fd)) {
+            continue;
+        }
+
+        if(connect(socket_fd, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) == 0) {
+            return socket_fd;
+        }
+
+        ns_socket_close(socket_fd);
+        socket_fd = NS_INVALID_SOCKET;
+    }
+
+    return NS_INVALID_SOCKET;
+}
+
+static ns_socket_t ns_try_bind_listen(struct addrinfo *results, int backlog) {
+    struct addrinfo *candidate = NULL;
+    ns_socket_t listen_socket = NS_INVALID_SOCKET;
+    int reuse = 1;
+
+    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
+        int dual_stack = 0;
+
+        listen_socket = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
+        if(!ns_socket_is_valid(listen_socket)) {
+            continue;
+        }
+
+        setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, (ns_socklen_t) sizeof(reuse));
+
+#ifdef _WIN32
+        if(candidate->ai_family == AF_INET6) {
+            dual_stack = 0;
+            setsockopt(listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &dual_stack,
+                       (ns_socklen_t) sizeof(dual_stack));
+        }
+#endif
+
+        if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
+            ns_socket_close(listen_socket);
+            listen_socket = NS_INVALID_SOCKET;
+            continue;
+        }
+
+        if(listen(listen_socket, backlog) == 0) {
+            return listen_socket;
+        }
+
+        ns_socket_close(listen_socket);
+        listen_socket = NS_INVALID_SOCKET;
+    }
+
+    return NS_INVALID_SOCKET;
+}
 /* ns_socket_t ns_connect_tcp -- Connects to a remote TCP server & returns the connected socket 
 
     -- Acts as a communication function for creating an outgoing TCP client connection
@@ -426,7 +486,6 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
 ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
     struct addrinfo *results = NULL;
-    struct addrinfo *candidate = NULL;
     ns_socket_t socket_fd = NS_INVALID_SOCKET;
     int status = 0;
 
@@ -447,19 +506,7 @@ ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffe
         return NS_INVALID_SOCKET;
     }
 
-    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
-        socket_fd = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if(!ns_socket_is_valid(socket_fd)) {
-            continue;
-        }
-
-        if(connect(socket_fd, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) == 0) {
-            break;
-        }
-
-        ns_socket_close(socket_fd);
-        socket_fd = NS_INVALID_SOCKET;
-    }
+    socket_fd = ns_try_connect_addrinfo(results);
 
     if(!ns_socket_is_valid(socket_fd) && error_buffer != NULL && error_buffer_size > 0) {
         ns_last_error_string(error_buffer, error_buffer_size);
@@ -524,10 +571,8 @@ ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffe
 ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
     struct addrinfo *results = NULL;
-    struct addrinfo *candidate = NULL;
     ns_socket_t listen_socket = NS_INVALID_SOCKET;
     int status = 0;
-    int reuse = 1;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -547,37 +592,7 @@ ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, siz
         return NS_INVALID_SOCKET;
     }
 
-    for(candidate = results; candidate != NULL; candidate = candidate->ai_next) {
-        int dual_stack = 0;
-
-        listen_socket = socket(candidate->ai_family, candidate->ai_socktype, candidate->ai_protocol);
-        if(!ns_socket_is_valid(listen_socket)) {
-            continue;
-        }
-
-        setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, (ns_socklen_t) sizeof(reuse));
-
-#ifdef _WIN32
-        if(candidate->ai_family == AF_INET6) {
-            dual_stack = 0;
-            setsockopt(listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &dual_stack,
-                       (ns_socklen_t) sizeof(dual_stack));
-        }
-#endif
-
-        if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
-            ns_socket_close(listen_socket);
-            listen_socket = NS_INVALID_SOCKET;
-            continue;
-        }
-
-        if(listen(listen_socket, backlog) == 0) {
-            break;
-        }
-
-        ns_socket_close(listen_socket);
-        listen_socket = NS_INVALID_SOCKET;
-    }
+    listen_socket = ns_try_bind_listen(results, backlog);
 
     if(!ns_socket_is_valid(listen_socket) && error_buffer != NULL && error_buffer_size > 0) {
         ns_last_error_string(error_buffer, error_buffer_size);
