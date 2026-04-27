@@ -483,12 +483,10 @@ static ns_socket_t ns_try_bind_listen(struct addrinfo *results, int backlog) {
 
         setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, (const char *) &reuse, (ns_socklen_t) sizeof(reuse));
 
-#ifdef _WIN32
         if(candidate->ai_family == AF_INET6) {
             dual_stack = 0;
             setsockopt(listen_socket, IPPROTO_IPV6, IPV6_V6ONLY, (const char *) &dual_stack, (ns_socklen_t) sizeof(dual_stack));
         }
-#endif
 
         if(bind(listen_socket, candidate->ai_addr, (ns_socklen_t) candidate->ai_addrlen) != 0) {
             ns_socket_close(listen_socket);
