@@ -12,6 +12,7 @@
         <property name="show-title-buttons">True</property>
         <property name="title-widget">
           <object class="GtkLabel">
+            <!-- This is the text shown in the textbox before people type -->
             <property name="label">Messages</property>
             <property name="css-classes">title-3</property>
           </object>

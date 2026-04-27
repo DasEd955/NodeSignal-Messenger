@@ -53,10 +53,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/tunerdesign/nodesignal_repo
+CMAKE_SOURCE_DIR = /media/sf_codes/project/NodeSignal-Messenger
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/tunerdesign/nodesignal_repo/build
+CMAKE_BINARY_DIR = /media/sf_codes/project/NodeSignal-Messenger/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/nodesignal_db.dir/depend.make
@@ -70,18 +70,18 @@ include CMakeFiles/nodesignal_db.dir/progress.make
 include CMakeFiles/nodesignal_db.dir/flags.make
 
 CMakeFiles/nodesignal_db.dir/database/db.c.o: CMakeFiles/nodesignal_db.dir/flags.make
-CMakeFiles/nodesignal_db.dir/database/db.c.o: /home/tunerdesign/nodesignal_repo/database/db.c
+CMakeFiles/nodesignal_db.dir/database/db.c.o: /media/sf_codes/project/NodeSignal-Messenger/database/db.c
 CMakeFiles/nodesignal_db.dir/database/db.c.o: CMakeFiles/nodesignal_db.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/nodesignal_db.dir/database/db.c.o"
-	/usr/bin/gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/nodesignal_db.dir/database/db.c.o -MF CMakeFiles/nodesignal_db.dir/database/db.c.o.d -o CMakeFiles/nodesignal_db.dir/database/db.c.o -c /home/tunerdesign/nodesignal_repo/database/db.c
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/nodesignal_db.dir/database/db.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/nodesignal_db.dir/database/db.c.o -MF CMakeFiles/nodesignal_db.dir/database/db.c.o.d -o CMakeFiles/nodesignal_db.dir/database/db.c.o -c /media/sf_codes/project/NodeSignal-Messenger/database/db.c
 
 CMakeFiles/nodesignal_db.dir/database/db.c.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/nodesignal_db.dir/database/db.c.i"
-	/usr/bin/gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /home/tunerdesign/nodesignal_repo/database/db.c > CMakeFiles/nodesignal_db.dir/database/db.c.i
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /media/sf_codes/project/NodeSignal-Messenger/database/db.c > CMakeFiles/nodesignal_db.dir/database/db.c.i
 
 CMakeFiles/nodesignal_db.dir/database/db.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/nodesignal_db.dir/database/db.c.s"
-	/usr/bin/gcc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /home/tunerdesign/nodesignal_repo/database/db.c -o CMakeFiles/nodesignal_db.dir/database/db.c.s
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /media/sf_codes/project/NodeSignal-Messenger/database/db.c -o CMakeFiles/nodesignal_db.dir/database/db.c.s
 
 # Object files for target nodesignal_db
 nodesignal_db_OBJECTS = \
@@ -93,7 +93,7 @@ nodesignal_db_EXTERNAL_OBJECTS =
 libnodesignal_db.a: CMakeFiles/nodesignal_db.dir/database/db.c.o
 libnodesignal_db.a: CMakeFiles/nodesignal_db.dir/build.make
 libnodesignal_db.a: CMakeFiles/nodesignal_db.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking C static library libnodesignal_db.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking C static library libnodesignal_db.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/nodesignal_db.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/nodesignal_db.dir/link.txt --verbose=$(VERBOSE)
 
@@ -106,6 +106,6 @@ CMakeFiles/nodesignal_db.dir/clean:
 .PHONY : CMakeFiles/nodesignal_db.dir/clean
 
 CMakeFiles/nodesignal_db.dir/depend:
-	cd /home/tunerdesign/nodesignal_repo/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/tunerdesign/nodesignal_repo /home/tunerdesign/nodesignal_repo /home/tunerdesign/nodesignal_repo/build /home/tunerdesign/nodesignal_repo/build /home/tunerdesign/nodesignal_repo/build/CMakeFiles/nodesignal_db.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /media/sf_codes/project/NodeSignal-Messenger/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /media/sf_codes/project/NodeSignal-Messenger /media/sf_codes/project/NodeSignal-Messenger /media/sf_codes/project/NodeSignal-Messenger/build /media/sf_codes/project/NodeSignal-Messenger/build /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles/nodesignal_db.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/nodesignal_db.dir/depend
 

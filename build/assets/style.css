@@ -1,38 +1,38 @@
 window {
-    background: #10131a;
-    color: #e7ebf3;
+    background: #ffffff;
+    color: #000000;
 }
 
 headerbar {
-    background: #161b24;
-    color: #f5f7fb;
+    background: #f5f5f7;
+    color: #000000;
     box-shadow: none;
 }
 
 frame {
-    border-radius: 18px;
-    background: #171c26;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    background: #f2f2f7;
+    border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 entry,
 textview {
-    background: #0f141d;
-    color: #edf2ff;
-    border-radius: 12px;
+    background: #ffffff;
+    color: #000000;
+    border-radius: 18px;
 }
 
 button {
-    background: #4c7dff;
+    background: #007aff;
     color: #ffffff;
-    border-radius: 12px;
+    border-radius: 18px;
     padding: 10px 18px;
 }
 
 button:hover {
-    background: #6a93ff;
+    background: #0a84ff;
 }
 
 label.dim-label {
-    color: #b8c0d4;
+    color: #6e6e73;
 }
