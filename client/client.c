@@ -130,6 +130,31 @@ static char *ns_client_build_asset_path(const NsClientApp *app, const char *file
     return g_build_filename(app->asset_dir, filename, NULL);
 }
 
+/* static gboolean ns_client_scroll_to_bottom -- Scrolls the chat transcript view to the most recent line
+
+    -- Acts as a helper function for ensuring the latest appended text is visible in the transcript
+    -- Used as an idle callback so scrolling occurs after GTK has completed layout and rendering
+
+    -- gpointer data: Pointer to the NsClientApp structure for the running client
+
+    -- Casts data to NsClientApp *app
+    -- Retrieves the insert mark from the transcript buffer, which represents the current cursor position
+    -- Calls gtk_text_view_scroll_to_mark() to scroll the transcript view so the insert mark is visible
+        -- Uses vertical alignment of 1.0 to position the view at the bottom of the buffer
+
+    -- Returns G_SOURCE_REMOVE so the idle callback runs only once
+    */
+static gboolean ns_client_scroll_to_bottom(gpointer data) {
+    NsClientApp *app = (NsClientApp *)data;
+
+    GtkTextMark *mark =
+        gtk_text_buffer_get_insert(app->transcript_buffer);
+
+    gtk_text_view_scroll_to_mark(app->transcript_view, mark, 0.0, TRUE, 0.0, 1.0);
+
+    return G_SOURCE_REMOVE;
+}
+
 /* static void ns_client_append_line -- Appends a line of text to the chat transcript view
 
     -- Acts as a helper function for adding new chat or status lines to the transcript
@@ -162,7 +187,8 @@ static void ns_client_append_line(NsClientApp *app, const char *line) {
     gtk_text_buffer_insert(app->transcript_buffer, &end, "\n", 1);
     gtk_text_buffer_get_end_iter(app->transcript_buffer, &end);
     gtk_text_buffer_place_cursor(app->transcript_buffer, &end);
-    gtk_text_view_scroll_mark_onscreen(app->transcript_view, gtk_text_buffer_get_insert(app->transcript_buffer));
+    //gtk_text_view_scroll_mark_onscreen(app->transcript_view, gtk_text_buffer_get_insert(app->transcript_buffer));
+    g_idle_add(ns_client_scroll_to_bottom, app);
 }
 
 /* static void ns_client_set_login_sensitive -- Enables or disables the login controls in the client UI
