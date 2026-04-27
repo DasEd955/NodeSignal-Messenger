@@ -124,6 +124,7 @@ On Windows, the install step also attempts to copy the runtime DLL dependencies 
 Start the server:
 
 ```sh
+./build/nodesignal_server (port#) (databasepath)
 ./build/nodesignal_server 5555 database/messages.db
 ```
 
