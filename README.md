@@ -74,6 +74,7 @@ Dependencies:
 - SQLite3 development package
 - a C compiler
 - `pkg-config` for GTK4 discovery
+- MSYS2 UCRT Shell (if recompiling on Windows)
 
     sudo apt update
     sudo apt install build-essential cmake pkg-config libgtk-4-dev libsqlite3-dev
@@ -98,9 +99,11 @@ The client UI assets are copied into `build/assets` during configuration.
 
 ## Package
 
-To create a portable install-style folder, run:
+To create a portable install-style folder dist (on Windows), run using MSYS2 UCRT Shell:
 
 ```sh
+cmake -S . -B build-win -G Ninja
+cmake --install build-win
 cmake --install build --prefix dist
 ```
 
