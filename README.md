@@ -150,6 +150,8 @@ The packaged server now defaults to `dist/bin/database/messages.db`, and the pac
 
 ## Docker
 
+Docker can be used as an alternative to manually installing dependencies on your local machine for easier development.
+
 Create a docker image:
 
 ```sh

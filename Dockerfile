@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# set working directory
 WORKDIR /app
 
 # copy project into container

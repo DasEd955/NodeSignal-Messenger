@@ -54,10 +54,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/tunerdesign/nodesignal_repo
+CMAKE_SOURCE_DIR = /media/sf_codes/project/NodeSignal-Messenger
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/tunerdesign/nodesignal_repo/build
+CMAKE_BINARY_DIR = /media/sf_codes/project/NodeSignal-Messenger/build
 
 #=============================================================================
 # Directory level rules for the build root directory
@@ -87,14 +87,14 @@ clean: CMakeFiles/nodesignal_client.dir/clean
 CMakeFiles/nodesignal_comm.dir/all:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_comm.dir/build.make CMakeFiles/nodesignal_comm.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_comm.dir/build.make CMakeFiles/nodesignal_comm.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=3,4 "Built target nodesignal_comm"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=3,4 "Built target nodesignal_comm"
 .PHONY : CMakeFiles/nodesignal_comm.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/nodesignal_comm.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/nodesignal_comm.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 0
 .PHONY : CMakeFiles/nodesignal_comm.dir/rule
 
 # Convenience name for target.
@@ -113,14 +113,14 @@ CMakeFiles/nodesignal_comm.dir/clean:
 CMakeFiles/nodesignal_db.dir/all: CMakeFiles/nodesignal_comm.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_db.dir/build.make CMakeFiles/nodesignal_db.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_db.dir/build.make CMakeFiles/nodesignal_db.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=5,6 "Built target nodesignal_db"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=5,6 "Built target nodesignal_db"
 .PHONY : CMakeFiles/nodesignal_db.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/nodesignal_db.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 4
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/nodesignal_db.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 0
 .PHONY : CMakeFiles/nodesignal_db.dir/rule
 
 # Convenience name for target.
@@ -140,14 +140,14 @@ CMakeFiles/nodesignal_server.dir/all: CMakeFiles/nodesignal_comm.dir/all
 CMakeFiles/nodesignal_server.dir/all: CMakeFiles/nodesignal_db.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_server.dir/build.make CMakeFiles/nodesignal_server.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_server.dir/build.make CMakeFiles/nodesignal_server.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=7,8 "Built target nodesignal_server"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=7,8 "Built target nodesignal_server"
 .PHONY : CMakeFiles/nodesignal_server.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/nodesignal_server.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 6
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 6
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/nodesignal_server.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 0
 .PHONY : CMakeFiles/nodesignal_server.dir/rule
 
 # Convenience name for target.
@@ -166,14 +166,14 @@ CMakeFiles/nodesignal_server.dir/clean:
 CMakeFiles/nodesignal_client.dir/all: CMakeFiles/nodesignal_comm.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_client.dir/build.make CMakeFiles/nodesignal_client.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/nodesignal_client.dir/build.make CMakeFiles/nodesignal_client.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/tunerdesign/nodesignal_repo/build/CMakeFiles --progress-num=1,2 "Built target nodesignal_client"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles --progress-num=1,2 "Built target nodesignal_client"
 .PHONY : CMakeFiles/nodesignal_client.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/nodesignal_client.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 4
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/nodesignal_client.dir/all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/tunerdesign/nodesignal_repo/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /media/sf_codes/project/NodeSignal-Messenger/build/CMakeFiles 0
 .PHONY : CMakeFiles/nodesignal_client.dir/rule
 
 # Convenience name for target.

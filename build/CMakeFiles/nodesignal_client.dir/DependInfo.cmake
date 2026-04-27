@@ -8,7 +8,7 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/tunerdesign/nodesignal_repo/client/client.c" "CMakeFiles/nodesignal_client.dir/client/client.c.o" "gcc" "CMakeFiles/nodesignal_client.dir/client/client.c.o.d"
+  "/media/sf_codes/project/NodeSignal-Messenger/client/client.c" "CMakeFiles/nodesignal_client.dir/client/client.c.o" "gcc" "CMakeFiles/nodesignal_client.dir/client/client.c.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.
