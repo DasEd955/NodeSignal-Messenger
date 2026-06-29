@@ -4,6 +4,10 @@
 # Implementation Log
 changes.md
 
+# Build
+build-win
+dist-win
+
 # Object files
 *.o
 *.ko

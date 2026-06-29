@@ -1,9 +1,9 @@
 # ninja log v7
-14	195	7989645202172243	CMakeFiles/nodesignal_db.dir/database/db.c.obj	4c9a54bd9f385fb5
-7	1324	7989645202115143	CMakeFiles/nodesignal_comm.dir/comm/comm.c.obj	4f208494c7072a64
-19	1338	7989645202226870	CMakeFiles/nodesignal_server.dir/server/server.c.obj	9b37be0f3024880b
-1326	1695	7989645215290867	libnodesignal_comm.a	84e469bca2efb5a8
-1695	1811	7989645218979989	libnodesignal_db.a	d26e159577ab64c
-1811	2135	7989645220139488	nodesignal_server.exe	1d527600483520f7
-24	2267	7989645202274277	CMakeFiles/nodesignal_client.dir/client/client.c.obj	e50d5b8327dc1ba7
-2272	2439	7989645224759288	nodesignal_client.exe	fb369c1022d6e7b2
+12	544	8044686332402464	CMakeFiles/nodesignal_db.dir/database/db.c.obj	b6fc7d7e0a7f8f9e
+7	4292	8044686332346691	CMakeFiles/nodesignal_comm.dir/comm/comm.c.obj	caf7a31cad09543
+18	4338	8044686332458238	CMakeFiles/nodesignal_server.dir/server/server.c.obj	9de0b2d5f4b493fb
+4295	4787	8044686375237841	libnodesignal_comm.a	84e469bca2efb5a8
+4787	4945	8044686380144538	libnodesignal_db.a	d26e159577ab64c
+4945	5198	8044686381728705	nodesignal_server.exe	1d527600483520f7
+25	13611	8044686332523916	CMakeFiles/nodesignal_client.dir/client/client.c.obj	8953c222ccd1fe6e
+13617	13813	8044686468444619	nodesignal_client.exe	fb369c1022d6e7b2

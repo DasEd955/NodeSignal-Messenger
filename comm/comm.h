@@ -60,6 +60,22 @@ extern "C" {
 #define NS_PACKET_BODY_MAX 512U
 #define NS_USERNAME_MAX 32U
 
+/* SECURITY NOTICE (threat model)
+ *
+ * Transport: all packets are sent in cleartext over TCP.  A network observer
+ * can read every username and message body.  TLS (e.g. OpenSSL) behind the
+ * ns_connect_tcp / ns_listen_tcp seam would fix this but is out of scope for
+ * this class project.
+ *
+ * Authentication: the server trusts whatever username a client sends.  There
+ * is no password, token, or challenge-response; anyone can claim any username
+ * including previously used ones.  This is a known limitation documented here
+ * rather than an oversight.
+ *
+ * These limitations mean NodeSignal Messenger should only be run on a trusted
+ * local network and never over the public internet with sensitive data.
+ */
+
 /* typedef enum NsPacketType -- Represents the different packet types used by the messaging protocol
 
     -- NS_PACKET_JOIN: Packet type used when a client requests to join the chat

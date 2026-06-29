@@ -806,6 +806,18 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
 
     memset(packet, 0, sizeof(*packet));
     packet->header.type = header_buffer[0];
+
+    switch(packet->header.type) {
+        case NS_PACKET_JOIN:
+        case NS_PACKET_TEXT:
+        case NS_PACKET_LEAVE:
+        case NS_PACKET_ACK:
+        case NS_PACKET_ERROR:
+            break;
+        default:
+            return -1;
+    }
+
     packet->header.sender_id = ns_load_u32(header_buffer + 4);
     packet->header.timestamp = ns_load_u32(header_buffer + 8);
     packet->header.body_len = ns_load_u32(header_buffer + 12);

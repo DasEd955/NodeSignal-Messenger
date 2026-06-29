@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger
+# Install script for directory: C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -38,7 +38,7 @@ if(NOT DEFINED CMAKE_OBJDUMP)
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/nodesignal_server.exe")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/nodesignal_server.exe")
   if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/nodesignal_server.exe" AND
      NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/nodesignal_server.exe")
     if(CMAKE_INSTALL_DO_STRIP)
@@ -48,7 +48,7 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/nodesignal_client.exe")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin" TYPE EXECUTABLE FILES "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/nodesignal_client.exe")
   if(EXISTS "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/nodesignal_client.exe" AND
      NOT IS_SYMLINK "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/bin/nodesignal_client.exe")
     if(CMAKE_INSTALL_DO_STRIP)
@@ -63,10 +63,10 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
     file(GET_RUNTIME_DEPENDENCIES
       RESOLVED_DEPENDENCIES_VAR _CMAKE_DEPS
       EXECUTABLES
-        "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/nodesignal_server.exe"
-        "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/nodesignal_client.exe"
+        "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/nodesignal_server.exe"
+        "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/nodesignal_client.exe"
       DIRECTORIES
-        "C:/Users/User/Downloads/msys64/ucrt64/bin"
+        "C:/Users/User/Downloads/msys64/ucrt64/bin/../bin"
       PRE_EXCLUDE_REGEXES
         "api-ms-"
         "ext-ms-"
@@ -87,19 +87,19 @@ endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
   file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin/assets" TYPE FILE FILES
-    "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/client/client.ui"
-    "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/client/style.css"
+    "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/client/client.ui"
+    "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/client/style.css"
     )
 endif()
 
 if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT)
-  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin/database" TYPE FILE FILES "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/package-database/.keep")
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/bin/database" TYPE FILE FILES "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/package-database/.keep")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/install_local_manifest.txt"
+  file(WRITE "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
 if(CMAKE_INSTALL_COMPONENT)
@@ -115,6 +115,6 @@ else()
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "C:/Users/User/Desktop/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win/${CMAKE_INSTALL_MANIFEST}"
+  file(WRITE "C:/Users/User/Desktop/Archived Classes/Computer Science/CMPSC311/NodeSignal Messenger/NodeSignal-Messenger/build-win2/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

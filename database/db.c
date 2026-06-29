@@ -35,7 +35,8 @@ static const char *NS_SCHEMA_SQL =
     "    sender_id INTEGER NOT NULL REFERENCES users(id),"
     "    body TEXT NOT NULL,"
     "    sent_at INTEGER NOT NULL"
-    ");";
+    ");"
+    "CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages (sender_id);";
 
 /* static int ns_db_find_user_id -- Looks up a user's database ID by username
 
@@ -67,24 +68,22 @@ static const char *NS_SCHEMA_SQL =
         -- Return -1
     */  
 static int ns_db_find_user_id(NsDatabase *database, const char *username, uint32_t *out_user_id) {
-    sqlite3_stmt *statement = NULL;
+    sqlite3_stmt *statement = database->stmt_find_user;
     int step_result = 0;
-    int rc = 0;
 
-    rc = sqlite3_prepare_v2(database->handle, "SELECT id FROM users WHERE username = ?1;", -1, &statement, NULL);
-    if(rc != SQLITE_OK) {
+    if(statement == NULL) {
         return -1;
     }
 
+    sqlite3_reset(statement);
+    sqlite3_clear_bindings(statement);
     sqlite3_bind_text(statement, 1, username, -1, SQLITE_TRANSIENT);
     step_result = sqlite3_step(statement);
     if(step_result == SQLITE_ROW) {
-        *out_user_id = (uint32_t) sqlite3_column_int(statement, 0);
-        sqlite3_finalize(statement);
+        *out_user_id = (uint32_t) sqlite3_column_int64(statement, 0);
         return 0;
     }
 
-    sqlite3_finalize(statement);
     return -1;
 }
 
@@ -121,6 +120,36 @@ int ns_db_open(NsDatabase *database, const char *path) {
     sqlite3_exec(database->handle, "PRAGMA journal_mode = WAL;", NULL, NULL, NULL);
     sqlite3_busy_timeout(database->handle, 5000);
 
+    if(sqlite3_prepare_v2(database->handle,
+            "SELECT id FROM users WHERE username = ?1;",
+            -1, &database->stmt_find_user, NULL) != SQLITE_OK) {
+        ns_db_close(database);
+        return -1;
+    }
+
+    if(sqlite3_prepare_v2(database->handle,
+            "INSERT OR IGNORE INTO users (username, created_at) VALUES (?1, ?2);",
+            -1, &database->stmt_insert_user, NULL) != SQLITE_OK) {
+        ns_db_close(database);
+        return -1;
+    }
+
+    if(sqlite3_prepare_v2(database->handle,
+            "INSERT INTO messages (sender_id, body, sent_at) VALUES (?1, ?2, ?3);",
+            -1, &database->stmt_insert_message, NULL) != SQLITE_OK) {
+        ns_db_close(database);
+        return -1;
+    }
+
+    if(sqlite3_prepare_v2(database->handle,
+            "SELECT u.username, m.body, m.sent_at"
+            " FROM messages m JOIN users u ON u.id = m.sender_id"
+            " ORDER BY m.id DESC LIMIT ?1;",
+            -1, &database->stmt_recent_messages, NULL) != SQLITE_OK) {
+        ns_db_close(database);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -138,6 +167,23 @@ int ns_db_open(NsDatabase *database, const char *path) {
 void ns_db_close(NsDatabase *database) {
     if(database == NULL || database->handle == NULL) {
         return;
+    }
+
+    if(database->stmt_find_user != NULL) {
+        sqlite3_finalize(database->stmt_find_user);
+        database->stmt_find_user = NULL;
+    }
+    if(database->stmt_insert_user != NULL) {
+        sqlite3_finalize(database->stmt_insert_user);
+        database->stmt_insert_user = NULL;
+    }
+    if(database->stmt_insert_message != NULL) {
+        sqlite3_finalize(database->stmt_insert_message);
+        database->stmt_insert_message = NULL;
+    }
+    if(database->stmt_recent_messages != NULL) {
+        sqlite3_finalize(database->stmt_recent_messages);
+        database->stmt_recent_messages = NULL;
     }
 
     sqlite3_close(database->handle);
@@ -227,25 +273,23 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
         return -1;
     }
 
+    statement = database->stmt_insert_user;
+    if(statement == NULL) {
+        return -1;
+    }
+
     rc = sqlite3_exec(database->handle, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
     if(rc != SQLITE_OK) {
         sqlite3_free(errmsg);
         return -1;
     }
 
-    rc = sqlite3_prepare_v2(database->handle,
-        "INSERT OR IGNORE INTO users (username, created_at) VALUES (?1, ?2);",
-        -1, &statement, NULL);
-    if(rc != SQLITE_OK) {
-        sqlite3_exec(database->handle, "ROLLBACK;", NULL, NULL, NULL);
-        return -1;
-    }
-
+    sqlite3_reset(statement);
+    sqlite3_clear_bindings(statement);
     sqlite3_bind_text(statement, 1, username, -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(statement, 2, (sqlite3_int64) time(NULL));
 
     step_result = sqlite3_step(statement);
-    sqlite3_finalize(statement);
     if(step_result != SQLITE_DONE) {
         sqlite3_exec(database->handle, "ROLLBACK;", NULL, NULL, NULL);
         return -1;
@@ -289,24 +333,24 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
     */
 int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *body, uint32_t timestamp) {
     sqlite3_stmt *statement = NULL;
-    int rc = 0;
     int step_result = 0;
 
     if(database == NULL || database->handle == NULL || body == NULL) {
         return -1;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, "INSERT INTO messages (sender_id, body, sent_at) VALUES (?1, ?2, ?3);", -1, &statement, NULL);
-    if(rc != SQLITE_OK) {
+    statement = database->stmt_insert_message;
+    if(statement == NULL) {
         return -1;
     }
 
-    sqlite3_bind_int(statement, 1, (int) sender_id);
+    sqlite3_reset(statement);
+    sqlite3_clear_bindings(statement);
+    sqlite3_bind_int64(statement, 1, (sqlite3_int64) sender_id);
     sqlite3_bind_text(statement, 2, body, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(statement, 3, (int) timestamp);
+    sqlite3_bind_int64(statement, 3, (sqlite3_int64) timestamp);
 
     step_result = sqlite3_step(statement);
-    sqlite3_finalize(statement);
     return step_result == SQLITE_DONE ? 0 : -1;
 }
 
@@ -330,4 +374,74 @@ const char *ns_db_last_error(const NsDatabase *database) {
     }
 
     return sqlite3_errmsg(database->handle);
+}
+
+/* int ns_db_recent_messages -- Retrieves the N most recent messages joined with sender usernames
+
+    -- Executes a pre-compiled SELECT against messages JOIN users ORDER BY id DESC LIMIT ?1
+    -- Results are collected into a temporary buffer then delivered to the callback in
+       ascending chronological order so the caller sees oldest-first output.
+
+    -- NsDatabase *database: open database handle
+    -- int limit: max rows to fetch; clamped to [1, 500]
+    -- NsMessageCallback callback: invoked once per row (username, body, sent_at, userdata)
+    -- void *userdata: passed unchanged to each callback invocation
+
+    -- Returns 0 on success or -1 on failure
+    */
+int ns_db_recent_messages(NsDatabase *database, int limit,
+                           NsMessageCallback callback, void *userdata) {
+    sqlite3_stmt *statement = NULL;
+
+    /* row buffer to reverse DESC into ascending order before delivering */
+    struct NsHistoryRow {
+        char username[64];
+        char body[513];
+        int64_t sent_at;
+    };
+    struct NsHistoryRow rows[500];
+    int count = 0;
+    int i = 0;
+
+    if(database == NULL || database->handle == NULL || callback == NULL) {
+        return -1;
+    }
+
+    if(limit < 1) {
+        limit = 1;
+    }
+    if(limit > 500) {
+        limit = 500;
+    }
+
+    statement = database->stmt_recent_messages;
+    if(statement == NULL) {
+        return -1;
+    }
+
+    sqlite3_reset(statement);
+    sqlite3_clear_bindings(statement);
+    sqlite3_bind_int(statement, 1, limit);
+
+    while(sqlite3_step(statement) == SQLITE_ROW && count < limit) {
+        const char *uname = (const char *) sqlite3_column_text(statement, 0);
+        const char *body  = (const char *) sqlite3_column_text(statement, 1);
+        int64_t sent_at   = (int64_t) sqlite3_column_int64(statement, 2);
+
+        if(uname == NULL || body == NULL) {
+            continue;
+        }
+
+        snprintf(rows[count].username, sizeof(rows[count].username), "%s", uname);
+        snprintf(rows[count].body,     sizeof(rows[count].body),     "%s", body);
+        rows[count].sent_at = sent_at;
+        ++count;
+    }
+
+    /* deliver oldest-first (reverse the DESC result set) */
+    for(i = count - 1; i >= 0; --i) {
+        callback(rows[i].username, rows[i].body, rows[i].sent_at, userdata);
+    }
+
+    return 0;
 }
