@@ -1,6 +1,9 @@
 # Prerequisites
 *.d
 
+# Implementation Log
+changes.md
+
 # Object files
 *.o
 *.ko

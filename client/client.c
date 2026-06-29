@@ -98,6 +98,7 @@ struct NsClientApp {
     GtkTextTag *username_tag;
     GMutex connection_lock;
     GThread *receiver_thread;
+    gboolean receiver_thread_active;
     ns_socket_t socket_fd;
     gboolean transport_connected;
     gboolean joined;
@@ -243,14 +244,21 @@ static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) 
     -- calls g_thread_join() to wait for the receiver thread to finish
     */
 static void ns_client_join_receiver_thread(NsClientApp *app) {
-    GThread *thread = app->receiver_thread;
+    GThread *thread = NULL;
 
-    if(thread == NULL) {
+    g_mutex_lock(&app->connection_lock);
+    if(!app->receiver_thread_active) {
+        g_mutex_unlock(&app->connection_lock);
         return;
     }
-
+    thread = app->receiver_thread;
     app->receiver_thread = NULL;
-    g_thread_join(thread);
+    app->receiver_thread_active = FALSE;
+    g_mutex_unlock(&app->connection_lock);
+
+    if(thread != NULL) {
+        g_thread_join(thread);
+    }
 }
 
 /* static ns_socket_t ns_client_take_socket -- Removes the active socket from the client state & resets connection fields
@@ -814,7 +822,10 @@ static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) 
         return;
     }
 
+    g_mutex_lock(&app->connection_lock);
+    app->receiver_thread_active = TRUE;
     app->receiver_thread = g_thread_new("nodesignal-recv", ns_client_receive_loop, app);
+    g_mutex_unlock(&app->connection_lock);
 }
 
 /* static gboolean ns_client_on_close_request -- Handles the window close request by disconnecting the client 
@@ -1071,26 +1082,27 @@ static void ns_client_on_shutdown(GApplication *application, gpointer user_data)
     */
 int ns_client_run(int argc, char **argv) {
     GtkApplication *application = NULL;
-    NsClientApp app;
+    NsClientApp *app = NULL;
     char executable_dir[1024];
     int status = 0;
 
-    memset(&app, 0, sizeof(app));
-    app.socket_fd = NS_INVALID_SOCKET;
-    g_mutex_init(&app.connection_lock);
+    app = g_new0(NsClientApp, 1);
+    app->socket_fd = NS_INVALID_SOCKET;
+    g_mutex_init(&app->connection_lock);
     if(ns_get_executable_dir(executable_dir, sizeof(executable_dir)) != 0) {
         snprintf(executable_dir, sizeof(executable_dir), ".");
     }
-    app.asset_dir = g_build_filename(executable_dir, "assets", NULL);
+    app->asset_dir = g_build_filename(executable_dir, "assets", NULL);
 
     application = gtk_application_new("com.nodesignal.messenger", G_APPLICATION_NON_UNIQUE);
-    g_signal_connect(application, "activate", G_CALLBACK(ns_client_on_activate), &app);
-    g_signal_connect(application, "shutdown", G_CALLBACK(ns_client_on_shutdown), &app);
+    g_signal_connect(application, "activate", G_CALLBACK(ns_client_on_activate), app);
+    g_signal_connect(application, "shutdown", G_CALLBACK(ns_client_on_shutdown), app);
 
     status = g_application_run(G_APPLICATION(application), argc, argv);
     g_object_unref(application);
-    g_free(app.asset_dir);
-    g_mutex_clear(&app.connection_lock);
+    g_free(app->asset_dir);
+    g_mutex_clear(&app->connection_lock);
+    g_free(app);
     return status;
 }
 

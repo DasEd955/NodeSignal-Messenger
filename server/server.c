@@ -16,6 +16,32 @@ server.c -- Defines the Logic for Running the Server
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef _WIN32
+#include <signal.h>
+#include <sys/time.h>
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+static volatile int ns_server_shutdown_requested = 0;
+
+#ifndef _WIN32
+static void ns_server_signal_handler(int signum) {
+    (void) signum;
+    ns_server_shutdown_requested = 1;
+}
+#else
+static BOOL WINAPI ns_server_console_handler(DWORD ctrl_type) {
+    if(ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT) {
+        ns_server_shutdown_requested = 1;
+        return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 // Return codes utilized by server packet handler functions 
 enum {
     NS_HANDLE_OK = 0,
@@ -539,6 +565,20 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     -- Marks the client slot as active
     -- Prints the accepted slot number to the server console
     */
+static void ns_server_set_socket_timeout(ns_socket_t socket_fd) {
+#ifdef _WIN32
+    DWORD timeout_ms = 30000;
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+#else
+    struct timeval timeout;
+    timeout.tv_sec = 30;
+    timeout.tv_usec = 0;
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+#endif
+}
+
 static void ns_server_accept_client(NsServerState *server) {
     struct sockaddr_storage address;
     ns_socklen_t address_length = (ns_socklen_t) sizeof(address);
@@ -549,6 +589,8 @@ static void ns_server_accept_client(NsServerState *server) {
     if(!ns_socket_is_valid(client_socket)) {
         return;
     }
+
+    ns_server_set_socket_timeout(client_socket);
 
     slot_index = ns_server_find_free_slot(server);
     if(slot_index < 0) {
@@ -853,6 +895,20 @@ static void ns_server_process_clients(NsServerState *server, fd_set *read_set) {
 int ns_server_run(const char *port, const char *database_path) {
     NsServerState server;
     char error_buffer[256];
+    int exit_code = EXIT_FAILURE;
+
+#ifndef _WIN32
+    {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = ns_server_signal_handler;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGINT, &sa, NULL);
+        sigaction(SIGTERM, &sa, NULL);
+    }
+#else
+    SetConsoleCtrlHandler(ns_server_console_handler, TRUE);
+#endif
 
     ns_server_init(&server);
 
@@ -881,14 +937,32 @@ int ns_server_run(const char *port, const char *database_path) {
         fd_set read_set;
         ns_socket_t max_socket = 0;
         int select_result = 0;
+        struct timeval timeout;
+
+        if(ns_server_shutdown_requested) {
+            printf("Shutdown requested. Stopping server.\n");
+            exit_code = EXIT_SUCCESS;
+            break;
+        }
 
         ns_server_build_read_set(&server, &read_set, &max_socket);
 
-        select_result = select((int)max_socket + 1, &read_set, NULL, NULL, NULL);
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+        select_result = select((int)max_socket + 1, &read_set, NULL, NULL, &timeout);
         if(select_result < 0) {
+            if(ns_server_shutdown_requested) {
+                printf("Shutdown requested. Stopping server.\n");
+                exit_code = EXIT_SUCCESS;
+                break;
+            }
             ns_last_error_string(error_buffer, sizeof(error_buffer));
             fprintf(stderr, "select() failed: %s\n", error_buffer);
             break;
+        }
+
+        if(select_result == 0) {
+            continue;
         }
 
         if(FD_ISSET(server.listen_socket, &read_set)) {
@@ -902,7 +976,7 @@ int ns_server_run(const char *port, const char *database_path) {
     ns_socket_close(server.listen_socket);
     ns_db_close(&server.database);
 
-    return EXIT_FAILURE;
+    return exit_code;
 }
 
 /* int main -- Entry point of the NodeSignal Server program

@@ -117,6 +117,10 @@ int ns_db_open(NsDatabase *database, const char *path) {
         return -1;
     }
 
+    sqlite3_exec(database->handle, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL);
+    sqlite3_exec(database->handle, "PRAGMA journal_mode = WAL;", NULL, NULL, NULL);
+    sqlite3_busy_timeout(database->handle, 5000);
+
     return 0;
 }
 
@@ -217,31 +221,44 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
     sqlite3_stmt *statement = NULL;
     int rc = 0;
     int step_result = 0;
+    char *errmsg = NULL;
 
     if(database == NULL || database->handle == NULL || username == NULL || out_user_id == NULL) {
         return -1;
     }
 
-    if(ns_db_find_user_id(database, username, out_user_id) == 0) {
-        return 0;
+    rc = sqlite3_exec(database->handle, "BEGIN IMMEDIATE;", NULL, NULL, &errmsg);
+    if(rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+        return -1;
     }
 
-    rc = sqlite3_prepare_v2(database->handle, "INSERT INTO users (username, created_at) VALUES (?1, ?2);", -1, &statement, NULL);
+    rc = sqlite3_prepare_v2(database->handle,
+        "INSERT OR IGNORE INTO users (username, created_at) VALUES (?1, ?2);",
+        -1, &statement, NULL);
     if(rc != SQLITE_OK) {
+        sqlite3_exec(database->handle, "ROLLBACK;", NULL, NULL, NULL);
         return -1;
     }
 
     sqlite3_bind_text(statement, 1, username, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(statement, 2, (int) time(NULL));
+    sqlite3_bind_int64(statement, 2, (sqlite3_int64) time(NULL));
 
     step_result = sqlite3_step(statement);
     sqlite3_finalize(statement);
     if(step_result != SQLITE_DONE) {
+        sqlite3_exec(database->handle, "ROLLBACK;", NULL, NULL, NULL);
         return -1;
     }
 
-    *out_user_id = (uint32_t) sqlite3_last_insert_rowid(database->handle);
-    return 0;
+    rc = sqlite3_exec(database->handle, "COMMIT;", NULL, NULL, &errmsg);
+    if(rc != SQLITE_OK) {
+        sqlite3_free(errmsg);
+        sqlite3_exec(database->handle, "ROLLBACK;", NULL, NULL, NULL);
+        return -1;
+    }
+
+    return ns_db_find_user_id(database, username, out_user_id);
 }
 
 /* int ns_db_insert_message -- Inserts a new message into the messages table
