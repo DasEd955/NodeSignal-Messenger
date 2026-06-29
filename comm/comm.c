@@ -20,7 +20,14 @@ comm.c -- Implements the shared networking & packet protocol logic
 #include <fcntl.h>
 #endif
 
-#define NS_PACKET_HEADER_SIZE 16U
+/* Wire header layout (14 bytes, tight):
+ *   [0]     version   (1 byte)
+ *   [1]     type      (1 byte)
+ *   [2..5]  sender_id (big-endian u32)
+ *   [6..9]  timestamp (big-endian u32)
+ *   [10..13] body_len (big-endian u32)
+ */
+#define NS_PACKET_HEADER_SIZE 14U
 
 /* static void ns_store_u32 -- Stores a 32-bit unsigned integer into a byte buffer in network byte order
 
@@ -685,6 +692,7 @@ int ns_packet_set(NsPacket *packet, uint8_t type, uint32_t sender_id, uint32_t t
     }
 
     memset(packet, 0, sizeof(*packet));
+    packet->header.version = NS_PROTOCOL_VERSION;
     packet->header.type = type;
     packet->header.sender_id = sender_id;
     packet->header.timestamp = timestamp;
@@ -739,10 +747,11 @@ int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     }
 
     memset(header_buffer, 0, sizeof(header_buffer));
-    header_buffer[0] = packet->header.type;
-    ns_store_u32(header_buffer + 4, packet->header.sender_id);
-    ns_store_u32(header_buffer + 8, packet->header.timestamp);
-    ns_store_u32(header_buffer + 12, packet->header.body_len);
+    header_buffer[0] = packet->header.version;
+    header_buffer[1] = packet->header.type;
+    ns_store_u32(header_buffer + 2,  packet->header.sender_id);
+    ns_store_u32(header_buffer + 6,  packet->header.timestamp);
+    ns_store_u32(header_buffer + 10, packet->header.body_len);
 
     if(ns_send_all(socket_fd, header_buffer, sizeof(header_buffer)) != 0) {
         return -1;
@@ -805,7 +814,12 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     }
 
     memset(packet, 0, sizeof(*packet));
-    packet->header.type = header_buffer[0];
+    packet->header.version = header_buffer[0];
+    if(packet->header.version != NS_PROTOCOL_VERSION) {
+        return NS_RECV_ERROR;
+    }
+
+    packet->header.type = header_buffer[1];
 
     switch(packet->header.type) {
         case NS_PACKET_JOIN:
@@ -815,12 +829,12 @@ int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
         case NS_PACKET_ERROR:
             break;
         default:
-            return -1;
+            return NS_RECV_ERROR;
     }
 
-    packet->header.sender_id = ns_load_u32(header_buffer + 4);
-    packet->header.timestamp = ns_load_u32(header_buffer + 8);
-    packet->header.body_len = ns_load_u32(header_buffer + 12);
+    packet->header.sender_id = ns_load_u32(header_buffer + 2);
+    packet->header.timestamp = ns_load_u32(header_buffer + 6);
+    packet->header.body_len  = ns_load_u32(header_buffer + 10);
 
     if(packet->header.body_len > NS_PACKET_BODY_MAX) {
         return -1;

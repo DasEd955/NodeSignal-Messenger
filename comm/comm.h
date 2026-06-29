@@ -59,6 +59,7 @@ extern "C" {
 
 #define NS_PACKET_BODY_MAX 512U
 #define NS_USERNAME_MAX 32U
+#define NS_PROTOCOL_VERSION 1U
 
 /* SECURITY NOTICE (threat model)
  *
@@ -94,12 +95,24 @@ typedef enum NsPacketType {
 
 /* typedef struct NsPacketHeader -- Represents the fixed size header (metadata) portion of a protocol packet
 
+    Wire format (14 bytes, packed tightly, big-endian u32s):
+      offset 0  : version   (1 byte)  — must equal NS_PROTOCOL_VERSION; reject mismatches
+      offset 1  : type      (1 byte)  — NsPacketType enum value
+      offset 2  : sender_id (4 bytes) — big-endian uint32
+      offset 6  : timestamp (4 bytes) — big-endian uint32 Unix seconds
+      offset 10 : body_len  (4 bytes) — big-endian uint32, <= NS_PACKET_BODY_MAX
+
+    The in-memory struct is NOT layout-compatible with the wire bytes;
+    ns_send_packet / ns_recv_packet serialize field-by-field.
+
+    -- uint8_t version: The protocol version; senders write NS_PROTOCOL_VERSION, receivers reject any other value
     -- uint8_t type: The packet type, such as JOIN, TEXT, LEAVE, ACK, or ERROR
     -- uint32_t sender_id: The numeric ID of the user associated with the packet
     -- uint32_t timestamp: The Unix timestamp for when the packet was created
-    -- uint32_t body_len: The length of the packet body in bytes 
+    -- uint32_t body_len: The length of the packet body in bytes
     */
 typedef struct NsPacketHeader {
+    uint8_t version;
     uint8_t type;
     uint32_t sender_id;
     uint32_t timestamp;
@@ -218,7 +231,8 @@ ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, siz
     -- uint32_t sender_id: The sender ID to store in the header
     -- uint32_t timestamp: The Unix timestamp to store in the header
     -- const char *body: The body text to copy into the packet
-    
+
+    -- Sets header.version to NS_PROTOCOL_VERSION automatically
     -- Used to prepare packets before sending them across the network
     -- Returns 0 upon success or -1 upon failure
     */

@@ -1,5 +1,5 @@
 /* ===================================================================================
-server.c -- Defines the Logic for Running the Server 
+server.c -- Defines the Logic for Running the Server
     -- Implements the messenger server
     -- Accepts clients
     -- Handles packets
@@ -12,18 +12,31 @@ server.c -- Defines the Logic for Running the Server
 #include "db.h"
 
 #include <stdbool.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef _WIN32
+#include <arpa/inet.h>
+#include <fcntl.h>
 #include <signal.h>
-#include <sys/time.h>
+#include <poll.h>
+#else
+#include <windows.h>
+/* Windows provides WSAPoll() via winsock2.h (already included by comm.h).
+   Map the POSIX names so the rest of the file is platform-neutral. */
+#define poll(fds, nfds, timeout) WSAPoll(fds, nfds, timeout)
+typedef ULONG nfds_t;
 #endif
 
-#ifdef _WIN32
-#include <windows.h>
-#endif
+/* Maximum simultaneous clients (replaces FD_SETSIZE ceiling from select() era).
+   poll() has no inherent fd ceiling; this cap is a policy choice. */
+#define NS_MAX_CLIENTS 1024
+
+/* Seconds after accept() before an unjoin'd connection is reaped (#9). */
+#define NS_AUTH_TIMEOUT_SECS 10
 
 static volatile int ns_server_shutdown_requested = 0;
 
@@ -42,19 +55,32 @@ static BOOL WINAPI ns_server_console_handler(DWORD ctrl_type) {
 }
 #endif
 
-// Return codes utilized by server packet handler functions 
+/* Return codes utilized by server packet handler functions. */
 enum {
     NS_HANDLE_OK = 0,
     NS_HANDLE_DISCONNECT = -1
 };
 
+/* Per-client outbound write buffer (#7).
+   Bytes are appended by ns_client_enqueue_send() and drained by
+   ns_client_drain_send() when POLLOUT fires. */
+#define NS_SEND_BUF_SIZE (NS_PACKET_BODY_MAX * 4U)
+
+typedef struct NsSendBuf {
+    unsigned char data[NS_SEND_BUF_SIZE];
+    size_t head; /* index of next byte to send */
+    size_t tail; /* index of next byte to write */
+} NsSendBuf;
+
 /* typedef struct NsClient -- Represents a connected client on the server
-    
+
     -- ns_socket_t socket_fd: The socket for the client's network connection
     -- bool active: Whether this client slot is currently in use
     -- bool joined: Whether the client has completed the chat join process
     -- uint32_t user_id: The numeric ID associated with the user from database
-    -- char username[NS_USERNAME_MAX + 1U]: The client's username as a C string, including room for null terminator
+    -- char username[NS_USERNAME_MAX + 1U]: The client's username as a C string
+    -- time_t connect_time: Wall-clock time this slot was last activated (#9)
+    -- NsSendBuf send_buf: Per-client outbound byte queue (#7)
     */
 typedef struct NsClient {
     ns_socket_t socket_fd;
@@ -62,19 +88,163 @@ typedef struct NsClient {
     bool joined;
     uint32_t user_id;
     char username[NS_USERNAME_MAX + 1U];
+    time_t connect_time;
+    NsSendBuf send_buf;
 } NsClient;
 
 /* typedef struct NsServerState -- Represents the overall state of the server while running
-    
-    -- ns_socket_t listen_socket: The server's main listening socket; used to accept new client connections
+
+    -- ns_socket_t listen_socket: The server's main listening socket
     -- NsDatabase database: The database object the server uses to store & retrieve client data
-    -- NsClient clients[FD_SETSIZE]: An array of client records. Each element stores information about one connected client
+    -- NsClient clients[NS_MAX_CLIENTS]: Client records; indexed to match poll_fds[1+i]
+    -- struct pollfd poll_fds[1 + NS_MAX_CLIENTS]: poll() fd array.
+         poll_fds[0]   = listen_socket
+         poll_fds[1+i] = clients[i].socket_fd
+    -- int client_count: Number of currently active client slots (for O(n) compaction)
     */
 typedef struct NsServerState {
     ns_socket_t listen_socket;
     NsDatabase database;
-    NsClient clients[FD_SETSIZE];
+    NsClient clients[NS_MAX_CLIENTS];
+    struct pollfd poll_fds[1 + NS_MAX_CLIENTS];
+    int client_count;
 } NsServerState;
+
+/* ns_client_enqueue_send -- Appends raw bytes to a client's outbound queue.
+   Returns 0 on success or -1 if the queue has insufficient space. */
+static int ns_client_enqueue_send(NsClient *client, const unsigned char *data, size_t len) {
+    size_t available = 0;
+    size_t head = client->send_buf.head;
+    size_t tail = client->send_buf.tail;
+
+    if(len == 0) {
+        return 0;
+    }
+
+    /* Ring buffer: one slot is always kept empty so head==tail means empty. */
+    if(tail >= head) {
+        available = NS_SEND_BUF_SIZE - (tail - head);
+    } else {
+        available = head - tail;
+    }
+
+    if(len > available - 1U) {
+        return -1; /* No room. */
+    }
+
+    /* Simple append — if tail + len wraps, split into two copies. */
+    if(tail + len <= NS_SEND_BUF_SIZE) {
+        memcpy(client->send_buf.data + tail, data, len);
+        client->send_buf.tail = tail + len;
+    } else {
+        size_t first = NS_SEND_BUF_SIZE - tail;
+        memcpy(client->send_buf.data + tail, data, first);
+        memcpy(client->send_buf.data, data + first, len - first);
+        client->send_buf.tail = len - first;
+    }
+
+    return 0;
+}
+
+/* ns_client_send_buf_pending -- Returns nonzero if there are bytes waiting to be sent. */
+static int ns_client_send_buf_pending(const NsClient *client) {
+    return client->send_buf.head != client->send_buf.tail;
+}
+
+/* ns_client_drain_send -- Flushes as many queued bytes as possible without blocking.
+   Returns 0 on success or -1 if the socket is broken (caller should disconnect). */
+static int ns_client_drain_send(NsClient *client) {
+    while(ns_client_send_buf_pending(client)) {
+        size_t head = client->send_buf.head;
+        size_t tail = client->send_buf.tail;
+        size_t to_send = 0;
+#ifdef _WIN32
+        int sent = 0;
+#else
+        ssize_t sent = 0;
+#endif
+
+        if(tail > head) {
+            to_send = tail - head;
+        } else {
+            to_send = NS_SEND_BUF_SIZE - head; /* Up to wrap. */
+        }
+
+#ifdef _WIN32
+        sent = send(client->socket_fd,
+                    (const char *)(client->send_buf.data + head),
+                    (int)to_send, 0);
+#else
+        sent = send(client->socket_fd,
+                    client->send_buf.data + head,
+                    to_send, MSG_DONTWAIT);
+#endif
+
+        if(sent <= 0) {
+#ifdef _WIN32
+            int err = WSAGetLastError();
+            if(err == WSAEWOULDBLOCK) {
+                return 0; /* Try again next POLLOUT. */
+            }
+#else
+            if(errno == EAGAIN || errno == EWOULDBLOCK) {
+                return 0; /* Try again next POLLOUT. */
+            }
+#endif
+            return -1; /* Real error. */
+        }
+
+        client->send_buf.head = (head + (size_t)sent) % NS_SEND_BUF_SIZE;
+    }
+
+    return 0;
+}
+
+/* ns_server_update_poll_events -- Syncs a client's POLLOUT flag with its send buffer state. */
+static void ns_server_update_poll_events(NsServerState *server, int client_index) {
+    short events = POLLIN;
+    if(ns_client_send_buf_pending(&server->clients[client_index])) {
+        events |= POLLOUT;
+    }
+    server->poll_fds[1 + client_index].events = events;
+}
+
+/* ns_server_enqueue_packet -- Serializes a packet and enqueues it into a specific client's
+   send buffer (for point-to-point sends such as ACK and ERROR).
+   Returns 0 on success or -1 on failure (buffer full or bad packet). */
+static int ns_server_enqueue_packet(NsServerState *server, int client_index, const NsPacket *packet) {
+    unsigned char wire[NS_PACKET_HEADER_SIZE + NS_PACKET_BODY_MAX];
+    size_t wire_len = 0;
+    uint32_t v = 0;
+    NsClient *client = NULL;
+
+    if(server == NULL || client_index < 0 || client_index >= NS_MAX_CLIENTS) {
+        return -1;
+    }
+    client = &server->clients[client_index];
+
+    if(packet == NULL || packet->header.body_len > NS_PACKET_BODY_MAX) {
+        return -1;
+    }
+
+    wire[0] = packet->header.version;
+    wire[1] = packet->header.type;
+    v = htonl(packet->header.sender_id); memcpy(wire + 2,  &v, 4);
+    v = htonl(packet->header.timestamp); memcpy(wire + 6,  &v, 4);
+    v = htonl(packet->header.body_len);  memcpy(wire + 10, &v, 4);
+    wire_len = NS_PACKET_HEADER_SIZE;
+
+    if(packet->header.body_len > 0) {
+        memcpy(wire + wire_len, packet->body, packet->header.body_len);
+        wire_len += packet->header.body_len;
+    }
+
+    if(ns_client_enqueue_send(client, wire, wire_len) != 0) {
+        return -1;
+    }
+    ns_server_update_poll_events(server, client_index);
+    return 0;
+}
 
 /* static void ns_server_reset_client -- Resets an NsClient record back to a clean default state
     
@@ -98,7 +268,9 @@ static void ns_server_reset_client(NsClient *client) {
     client->active = false;
     client->joined = false;
     client->user_id = 0U;
+    client->connect_time = 0;
     memset(client->username, 0, sizeof(client->username));
+    memset(&client->send_buf, 0, sizeof(client->send_buf));
 }
 
 /* static void ns_server_init -- Initializes the server state to a clean default state
@@ -121,10 +293,18 @@ static void ns_server_init(NsServerState *server) {
 
     memset(server, 0, sizeof(*server));
     server->listen_socket = NS_INVALID_SOCKET;
+    server->client_count = 0;
 
-    for(index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < NS_MAX_CLIENTS; ++index) {
         ns_server_reset_client(&server->clients[index]);
+        server->poll_fds[1 + index].fd = -1;
+        server->poll_fds[1 + index].events = 0;
+        server->poll_fds[1 + index].revents = 0;
     }
+
+    server->poll_fds[0].fd = -1;
+    server->poll_fds[0].events = POLLIN;
+    server->poll_fds[0].revents = 0;
 }
 
 /* static int ns_server_find_free_slot -- Finds the index of the first unused client slot
@@ -145,7 +325,7 @@ static void ns_server_init(NsServerState *server) {
 static int ns_server_find_free_slot(const NsServerState *server) {
     int index = 0;
 
-    for(index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < NS_MAX_CLIENTS; ++index) {
         if(!server->clients[index].active) {
             return index;
         }
@@ -178,7 +358,7 @@ static int ns_server_find_free_slot(const NsServerState *server) {
 static bool ns_server_username_in_use(const NsServerState *server, const char *username, int skip_index) {
     int index = 0;
 
-    for(index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < NS_MAX_CLIENTS; ++index) {
         const NsClient *client = &server->clients[index];
         if(!client->active || !client->joined || index == skip_index) {
             continue;
@@ -210,14 +390,17 @@ static bool ns_server_username_in_use(const NsServerState *server, const char *u
     -- Calls ns_send_packet() to send the error packet to the client's socket
     -- Casts the return value to (void) as the function does not use that result
     */
-static void ns_server_send_error(NsClient *client, const char *message) {
+static void ns_server_send_error(NsServerState *server, int client_index, const char *message) {
     NsPacket packet;
+    NsClient *client = NULL;
 
-    if(client == NULL || !client->active) {return;}
+    if(server == NULL || client_index < 0 || client_index >= NS_MAX_CLIENTS) {return;}
+    client = &server->clients[client_index];
+    if(!client->active) {return;}
 
     if(ns_packet_set(&packet, NS_PACKET_ERROR, 0U, ns_unix_time_now(), message) != 0) {return;}
 
-    (void)ns_send_packet(client->socket_fd, &packet);
+    (void)ns_server_enqueue_packet(server, client_index, &packet);
 }
 
 /* static void ns_server_disconnect_client -- Forward Declaration
@@ -250,18 +433,47 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
         -- If sending fails, calls ns_server_disconnect_client() to remove the client
     -- Sends the packet only to valid active joined clients that are not excluded 
     */
+/* ns_server_broadcast -- Serializes packet into bytes and enqueues it into each active
+   joined client's outbound buffer (except exclude_index).  Actual transmission happens
+   lazily when POLLOUT fires for each client, so a slow receiver never blocks others. */
 static void ns_server_broadcast(NsServerState *server, const NsPacket *packet, int exclude_index) {
+    /* Build the wire representation once, then copy it into each client's queue. */
+    unsigned char wire[NS_PACKET_HEADER_SIZE + NS_PACKET_BODY_MAX];
+    size_t wire_len = 0;
     int index = 0;
 
-    for(index = 0; index < FD_SETSIZE; ++index) {
+    if(packet == NULL || packet->header.body_len > NS_PACKET_BODY_MAX) {
+        return;
+    }
+
+    /* Serialize header into wire buffer. */
+    wire[0] = packet->header.version;
+    wire[1] = packet->header.type;
+    {
+        uint32_t v;
+        v = htonl(packet->header.sender_id); memcpy(wire + 2,  &v, 4);
+        v = htonl(packet->header.timestamp); memcpy(wire + 6,  &v, 4);
+        v = htonl(packet->header.body_len);  memcpy(wire + 10, &v, 4);
+    }
+    wire_len = NS_PACKET_HEADER_SIZE;
+
+    if(packet->header.body_len > 0) {
+        memcpy(wire + wire_len, packet->body, packet->header.body_len);
+        wire_len += packet->header.body_len;
+    }
+
+    for(index = 0; index < NS_MAX_CLIENTS; ++index) {
         NsClient *client = &server->clients[index];
         if(!client->active || !client->joined || index == exclude_index) {
             continue;
         }
 
-        if(ns_send_packet(client->socket_fd, packet) != 0) {
+        if(ns_client_enqueue_send(client, wire, wire_len) != 0) {
+            /* Buffer full — disconnect this slow client rather than blocking everyone. */
             ns_server_disconnect_client(server, index, false);
+            continue;
         }
+        ns_server_update_poll_events(server, index);
     }
 }
 
@@ -285,7 +497,7 @@ static void ns_server_broadcast(NsServerState *server, const NsPacket *packet, i
 static void ns_server_disconnect_client(NsServerState *server, int client_index, bool announce_leave) {
     NsClient *client = NULL;
 
-    if(server == NULL || client_index < 0 || client_index >= FD_SETSIZE) {
+    if(server == NULL || client_index < 0 || client_index >= NS_MAX_CLIENTS) {
         return;
     }
 
@@ -312,7 +524,17 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
 
     ns_socket_shutdown(client->socket_fd);
     ns_socket_close(client->socket_fd);
+
+    /* Remove this fd from the poll array. */
+    server->poll_fds[1 + client_index].fd = -1;
+    server->poll_fds[1 + client_index].events = 0;
+    server->poll_fds[1 + client_index].revents = 0;
+
     ns_server_reset_client(client);
+    --server->client_count;
+    if(server->client_count < 0) {
+        server->client_count = 0;
+    }
 }
 
 /* static bool ns_server_join_validate -- Validates whether a client may join the chat
@@ -333,17 +555,19 @@ static void ns_server_disconnect_client(NsServerState *server, int client_index,
 
     -- Returns true if all validation checks pass
     */
-static bool ns_server_join_validate(NsServerState *server, NsClient *client, const NsPacket *packet) {
+static bool ns_server_join_validate(NsServerState *server, int client_index, const NsPacket *packet) {
+    NsClient *client = &server->clients[client_index];
+
     if(client->joined) {
-        ns_server_send_error(client, "This connection already joined the chat.");
+        ns_server_send_error(server, client_index, "This connection already joined the chat.");
         return false;
     }
     if(packet->header.body_len == 0 || packet->header.body_len > NS_USERNAME_MAX) {
-        ns_server_send_error(client, "Usernames must be between 1 and 32 characters.");
+        ns_server_send_error(server, client_index, "Usernames must be between 1 and 32 characters.");
         return false;
     }
-    if(ns_server_username_in_use(server, packet->body, (int)(client - server->clients))) {
-        ns_server_send_error(client, "That username is already active.");
+    if(ns_server_username_in_use(server, packet->body, client_index)) {
+        ns_server_send_error(server, client_index, "That username is already active.");
         return false;
     }
     return true;
@@ -379,7 +603,8 @@ static bool ns_server_join_validate(NsServerState *server, NsClient *client, con
     -- Prints a join message to the server console
     -- Returns NS_HANDLE_OK upon success
     */
-static int ns_server_join_finalize(NsServerState *server, NsClient *client, const NsPacket *packet) {
+static int ns_server_join_finalize(NsServerState *server, int client_index, const NsPacket *packet) {
+    NsClient *client = &server->clients[client_index];
     NsPacket ack_packet;
     NsPacket join_packet;
     char status_text[NS_PACKET_BODY_MAX + 1U];
@@ -388,7 +613,7 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
 
     if(ns_db_get_or_create_user(&server->database, packet->body, &user_id) != 0) {
         fprintf(stderr, "Failed to create user '%s': %s\n", packet->body, ns_db_last_error(&server->database));
-        ns_server_send_error(client, "The server could not register that username.");
+        ns_server_send_error(server, client_index, "The server could not register that username.");
         return NS_HANDLE_DISCONNECT;
     }
 
@@ -402,7 +627,7 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
         return NS_HANDLE_DISCONNECT;
     }
 
-    if (ns_send_packet(client->socket_fd, &ack_packet) != 0) {
+    if(ns_server_enqueue_packet(server, client_index, &ack_packet) != 0) {
         return NS_HANDLE_DISCONNECT;
     }
 
@@ -444,13 +669,11 @@ static int ns_server_join_finalize(NsServerState *server, NsClient *client, cons
         -- NS_HANDLE_DISCONNECT on failure
     */
 static int ns_server_handle_join(NsServerState *server, int client_index, const NsPacket *packet) {
-    NsClient *client = &server->clients[client_index];
-
-    if(!ns_server_join_validate(server, client, packet)) {
+    if(!ns_server_join_validate(server, client_index, packet)) {
         return NS_HANDLE_DISCONNECT;
     }
 
-    return ns_server_join_finalize(server, client, packet);
+    return ns_server_join_finalize(server, client_index, packet);
 }
 
 /* static int ns_server_handle_text -- Processes a client's TEXT packet
@@ -496,7 +719,6 @@ static bool ns_server_build_display_text(NsClient *client, const NsPacket *packe
     return !(len < 0 || (size_t)len >= out_size);
 }
 
-/* REPLACEMENT FUNCTION */
 static int ns_server_handle_text(NsServerState *server, int client_index, const NsPacket *packet) {
     NsClient *client = &server->clients[client_index];
     NsPacket broadcast_packet;
@@ -504,17 +726,17 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     uint32_t timestamp = ns_unix_time_now();
 
     if (!client->joined) {
-        ns_server_send_error(client, "Join the chat before sending messages.");
+        ns_server_send_error(server, client_index, "Join the chat before sending messages.");
         return NS_HANDLE_DISCONNECT;
     }
 
     if (packet->header.body_len == 0) {
-        ns_server_send_error(client, "Messages cannot be empty.");
+        ns_server_send_error(server, client_index, "Messages cannot be empty.");
         return NS_HANDLE_OK;
     }
 
     if (!ns_server_build_display_text(client, packet, display_text, sizeof(display_text))) {
-        ns_server_send_error(client, "That message is too long once the username is added.");
+        ns_server_send_error(server, client_index, "That message is too long once the username is added.");
         return NS_HANDLE_OK;
     }
 
@@ -522,12 +744,12 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
         fprintf(stderr, "Failed to store message for '%s': %s\n",
                 client->username,
                 ns_db_last_error(&server->database));
-        ns_server_send_error(client, "The server could not store that message.");
+        ns_server_send_error(server, client_index, "The server could not store that message.");
         return NS_HANDLE_DISCONNECT;
     }
 
     if (ns_packet_set(&broadcast_packet, NS_PACKET_TEXT, client->user_id, timestamp, display_text) != 0) {
-        ns_server_send_error(client, "That message is too long.");
+        ns_server_send_error(server, client_index, "That message is too long.");
         return NS_HANDLE_OK;
     }
 
@@ -565,17 +787,19 @@ static int ns_server_handle_text(NsServerState *server, int client_index, const 
     -- Marks the client slot as active
     -- Prints the accepted slot number to the server console
     */
-static void ns_server_set_socket_timeout(ns_socket_t socket_fd) {
+/* ns_server_set_nonblocking -- Puts a socket into non-blocking mode so poll()-driven
+   reads and writes never stall the server loop. */
+static void ns_server_set_nonblocking(ns_socket_t socket_fd) {
 #ifdef _WIN32
-    DWORD timeout_ms = 30000;
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
-    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms));
+    u_long mode = 1;
+    ioctlsocket(socket_fd, FIONBIO, &mode);
 #else
-    struct timeval timeout;
-    timeout.tv_sec = 30;
-    timeout.tv_usec = 0;
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    {
+        int flags = fcntl(socket_fd, F_GETFL, 0);
+        if(flags >= 0) {
+            fcntl(socket_fd, F_SETFL, flags | O_NONBLOCK);
+        }
+    }
 #endif
 }
 
@@ -590,7 +814,7 @@ static void ns_server_accept_client(NsServerState *server) {
         return;
     }
 
-    ns_server_set_socket_timeout(client_socket);
+    ns_server_set_nonblocking(client_socket);
 
     slot_index = ns_server_find_free_slot(server);
     if(slot_index < 0) {
@@ -605,6 +829,14 @@ static void ns_server_accept_client(NsServerState *server) {
     ns_server_reset_client(&server->clients[slot_index]);
     server->clients[slot_index].socket_fd = client_socket;
     server->clients[slot_index].active = true;
+    server->clients[slot_index].connect_time = time(NULL);
+
+    /* Register in the poll array, initially watching only for incoming data. */
+    server->poll_fds[1 + slot_index].fd = (int) client_socket;
+    server->poll_fds[1 + slot_index].events = POLLIN;
+    server->poll_fds[1 + slot_index].revents = 0;
+    ++server->client_count;
+
     printf("Accepted client on slot %d\n", slot_index);
 }
 
@@ -680,99 +912,30 @@ static void ns_server_accept_client(NsServerState *server) {
         -- Returns EXIT_FAILURE
     */
 
-/* static void ns_server_build_read_set -- Builds the file descriptor set for select()
-
-    -- Acts as a helper function for preparing the set of sockets to monitor for incoming data
-    -- Used before calling select() to track the listening socket and all active client sockets
-
-    -- NsServerState *server: The server state containing the listening socket and clients
-    -- fd_set *read_set: The set of file descriptors to populate
-    -- ns_socket_t *max_socket: Output parameter storing the highest socket value
-
-    -- Clears the read_set using FD_ZERO()
-    -- Adds the listening socket to the set
-    -- Initializes max_socket with the listening socket
-
-    -- Loops through all client slots:
-        -- Skips inactive clients
-        -- Adds each active client socket to read_set
-        -- Updates max_socket if a higher socket value is found
-    */
-static void ns_server_build_read_set(NsServerState *server, fd_set *read_set, ns_socket_t *max_socket) {
-    int index = 0;
-
-    FD_ZERO(read_set);
-
-    FD_SET(server->listen_socket, read_set);
-    *max_socket = server->listen_socket;
-
-    for(index = 0; index < FD_SETSIZE; ++index) {
-        NsClient *client = &server->clients[index];
-
-        if(!client->active) {
-            continue;
-        }
-
-        FD_SET(client->socket_fd, read_set);
-
-        if(client->socket_fd > *max_socket) {
-            *max_socket = client->socket_fd;
-        }
-    }
-}
-
-/* static void ns_server_process_new_connection -- Handles readiness of the listening socket
-
-    -- Acts as a helper function for processing new incoming client connections
-    -- Used when select() indicates the listening socket is ready to accept a connection
-
-    -- NsServerState *server: The server state containing the listening socket
-
-    -- Calls ns_server_accept_client() to accept and register the new client
-    */
-static void ns_server_process_new_connection(NsServerState *server) {
-    ns_server_accept_client(server);
-}
-
-/* static void ns_server_handle_client_packet -- Processes a single client's incoming packet
-
-    -- Acts as a helper function for receiving and handling packets from a specific client
-    -- Used during the main server loop when a client socket is ready for reading
-
-    -- NsServerState *server: The server state containing client records
-    -- int index: The index of the client in the client array
-    -- NsClient *client: The client being processed
-    -- fd_set *read_set: The set of sockets ready for reading
-
-    -- If the client is inactive or its socket is not set in read_set:
-        -- Returns immediately
-
-    -- Calls ns_recv_packet() to receive the next packet
-    -- If receiving fails:
-        -- Disconnects the client and returns
-
-    -- Checks packet type and dispatches accordingly:
-        -- NS_PACKET_JOIN:
-            -- Calls ns_server_handle_join()
-            -- Disconnects client on failure
-        -- NS_PACKET_TEXT:
-            -- Calls ns_server_handle_text()
-            -- Disconnects client on failure
-        -- NS_PACKET_LEAVE:
-            -- Disconnects client and announces leave
-        -- default:
-            -- Sends error and disconnects client
-    */
-static void ns_server_handle_client_packet(NsServerState *server, int index, NsClient *client, fd_set *read_set) {
+/* ns_server_handle_client_readable -- Reads and dispatches one packet from a client whose
+   POLLIN fired.  Non-blocking reads mean ns_recv_packet may return NS_RECV_ERROR with
+   EAGAIN/EWOULDBLOCK — treated as "no data yet" rather than disconnect. */
+static void ns_server_handle_client_readable(NsServerState *server, int index) {
+    NsClient *client = &server->clients[index];
     NsPacket packet;
     int receive_result = 0;
 
-    if(!client->active || !FD_ISSET(client->socket_fd, read_set)) {
+    receive_result = ns_recv_packet(client->socket_fd, &packet);
+    if(receive_result == NS_RECV_CLOSED) {
+        ns_server_disconnect_client(server, index, client->joined);
         return;
     }
-
-    receive_result = ns_recv_packet(client->socket_fd, &packet);
-    if(receive_result <= 0) {
+    if(receive_result == NS_RECV_ERROR) {
+#ifdef _WIN32
+        int err = WSAGetLastError();
+        if(err == WSAEWOULDBLOCK) {
+            return;
+        }
+#else
+        if(errno == EAGAIN || errno == EWOULDBLOCK) {
+            return;
+        }
+#endif
         ns_server_disconnect_client(server, index, client->joined);
         return;
     }
@@ -795,35 +958,28 @@ static void ns_server_handle_client_packet(NsServerState *server, int index, NsC
             break;
 
         default:
-            ns_server_send_error(client, "Unsupported packet type.");
+            ns_server_send_error(server, index, "Unsupported packet type.");
             ns_server_disconnect_client(server, index, false);
             break;
     }
 }
 
-/* static void ns_server_process_clients -- Iterates through clients and processes ready sockets
-
-    -- Acts as a helper function for handling all client activity after select()
-    -- Used to process incoming packets from each active client
-
-    -- NsServerState *server: The server state containing client records
-    -- fd_set *read_set: The set of sockets ready for reading
-
-    -- Loops through all client slots:
-        -- Skips inactive clients
-        -- Calls ns_server_handle_client_packet() for each active client
-    */
-static void ns_server_process_clients(NsServerState *server, fd_set *read_set) {
+/* ns_server_reap_auth_timeouts -- Disconnects clients that accepted() but never sent a
+   JOIN within NS_AUTH_TIMEOUT_SECS.  Called once per poll() wakeup cycle (#9). */
+static void ns_server_reap_auth_timeouts(NsServerState *server) {
+    time_t now = time(NULL);
     int index = 0;
 
-    for(index = 0; index < FD_SETSIZE; ++index) {
+    for(index = 0; index < NS_MAX_CLIENTS; ++index) {
         NsClient *client = &server->clients[index];
-
-        if(!client->active) {
+        if(!client->active || client->joined) {
             continue;
         }
-
-        ns_server_handle_client_packet(server, index, client, read_set);
+        if(now - client->connect_time >= NS_AUTH_TIMEOUT_SECS) {
+            printf("Auth timeout: slot %d\n", index);
+            ns_server_send_error(server, index, "Authentication timeout.");
+            ns_server_disconnect_client(server, index, false);
+        }
     }
 }
 
@@ -893,9 +1049,15 @@ static void ns_server_process_clients(NsServerState *server, fd_set *read_set) {
     -- Returns EXIT_FAILURE to indicate the server terminated due to an error
 */
 int ns_server_run(const char *port, const char *database_path) {
-    NsServerState server;
+    /* Heap-allocated: NsServerState holds per-client send buffers (~2 MB total). */
+    NsServerState *srv = (NsServerState *) calloc(1, sizeof(NsServerState));
     char error_buffer[256];
     int exit_code = EXIT_FAILURE;
+
+    if(srv == NULL) {
+        fprintf(stderr, "Out of memory: cannot allocate server state.\n");
+        return EXIT_FAILURE;
+    }
 
 #ifndef _WIN32
     {
@@ -910,34 +1072,40 @@ int ns_server_run(const char *port, const char *database_path) {
     SetConsoleCtrlHandler(ns_server_console_handler, TRUE);
 #endif
 
-    ns_server_init(&server);
+    ns_server_init(srv);
 
-    if(ns_db_open(&server.database, database_path) != 0) {
+    if(ns_db_open(&srv->database, database_path) != 0) {
         fprintf(stderr, "Unable to open database '%s'.\n", database_path);
+        free(srv);
         return EXIT_FAILURE;
     }
 
-    if(ns_db_init_schema(&server.database) != 0) {
+    if(ns_db_init_schema(&srv->database) != 0) {
         fprintf(stderr, "Unable to initialize database schema.\n");
-        ns_db_close(&server.database);
+        ns_db_close(&srv->database);
+        free(srv);
         return EXIT_FAILURE;
     }
 
-    server.listen_socket = ns_listen_tcp(port, 16, error_buffer, sizeof(error_buffer));
-    if(!ns_socket_is_valid(server.listen_socket)) {
+    srv->listen_socket = ns_listen_tcp(port, 16, error_buffer, sizeof(error_buffer));
+    if(!ns_socket_is_valid(srv->listen_socket)) {
         fprintf(stderr, "Unable to start server on port %s: %s\n", port, error_buffer);
-        ns_db_close(&server.database);
+        ns_db_close(&srv->database);
+        free(srv);
         return EXIT_FAILURE;
     }
 
     printf("NodeSignal Server listening on port %s\n", port);
     printf("Using database at %s\n", database_path);
 
+    /* poll_fds[0] always tracks the listen socket. */
+    srv->poll_fds[0].fd = (int) srv->listen_socket;
+    srv->poll_fds[0].events = POLLIN;
+
     for(;;) {
-        fd_set read_set;
-        ns_socket_t max_socket = 0;
-        int select_result = 0;
-        struct timeval timeout;
+        int poll_result = 0;
+        int index = 0;
+        nfds_t nfds = 1 + (nfds_t) NS_MAX_CLIENTS;
 
         if(ns_server_shutdown_requested) {
             printf("Shutdown requested. Stopping server.\n");
@@ -945,36 +1113,66 @@ int ns_server_run(const char *port, const char *database_path) {
             break;
         }
 
-        ns_server_build_read_set(&server, &read_set, &max_socket);
-
-        timeout.tv_sec = 1;
-        timeout.tv_usec = 0;
-        select_result = select((int)max_socket + 1, &read_set, NULL, NULL, &timeout);
-        if(select_result < 0) {
+        /* 1-second timeout lets the shutdown flag be polled promptly and
+           also drives the auth-timeout sweep once per second. */
+        poll_result = poll(srv->poll_fds, nfds, 1000);
+        if(poll_result < 0) {
             if(ns_server_shutdown_requested) {
                 printf("Shutdown requested. Stopping server.\n");
                 exit_code = EXIT_SUCCESS;
                 break;
             }
             ns_last_error_string(error_buffer, sizeof(error_buffer));
-            fprintf(stderr, "select() failed: %s\n", error_buffer);
+            fprintf(stderr, "poll() failed: %s\n", error_buffer);
             break;
         }
 
-        if(select_result == 0) {
+        /* Reap half-open connections that never sent JOIN (#9). */
+        ns_server_reap_auth_timeouts(srv);
+
+        if(poll_result == 0) {
             continue;
         }
 
-        if(FD_ISSET(server.listen_socket, &read_set)) {
-            ns_server_process_new_connection(&server);
+        /* Check for a new incoming connection. */
+        if(srv->poll_fds[0].revents & POLLIN) {
+            ns_server_accept_client(srv);
         }
 
-        ns_server_process_clients(&server, &read_set);
+        /* Service each client slot. */
+        for(index = 0; index < NS_MAX_CLIENTS; ++index) {
+            NsClient *client = &srv->clients[index];
+            struct pollfd *pfd = &srv->poll_fds[1 + index];
+
+            if(!client->active || pfd->revents == 0) {
+                continue;
+            }
+
+            /* Drain any pending outbound data first (#7). */
+            if(pfd->revents & POLLOUT) {
+                if(ns_client_drain_send(client) != 0) {
+                    ns_server_disconnect_client(srv, index, client->joined);
+                    continue;
+                }
+                ns_server_update_poll_events(srv, index);
+            }
+
+            /* Handle incoming data (#5). */
+            if(pfd->revents & POLLIN) {
+                ns_server_handle_client_readable(srv, index);
+            }
+
+            /* Connection reset or hangup. */
+            if(pfd->revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                ns_server_disconnect_client(srv, index, client->joined);
+            }
+        }
     }
 
-    ns_socket_shutdown(server.listen_socket);
-    ns_socket_close(server.listen_socket);
-    ns_db_close(&server.database);
+    ns_socket_shutdown(srv->listen_socket);
+    ns_socket_close(srv->listen_socket);
+    ns_db_close(&srv->database);
+    free(srv);
 
     return exit_code;
 }
