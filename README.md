@@ -120,7 +120,7 @@ block-beta
     timestamp["timestamp\n(4 bytes, big-endian)"]
     body_len["body_len\n(4 bytes, big-endian)"]
   end
-  block:BODY["Variable Body"]:6
+  block:BODY["Variable Body (length read from body_len; 0 bytes for LEAVE and ACK, up to 512 for TEXT and JOIN)"]:6
     body["body\n(0 to 512 bytes, UTF-8)"]:6
   end
 ```
