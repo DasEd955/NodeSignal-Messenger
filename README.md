@@ -79,7 +79,7 @@ graph TD
         GTK <-->|"read/write"| LOCK
     end
 
-    subgraph COMM_LIB["nodesignal_comm (static library)"]
+    subgraph COMM_LIB["nodesignal_comm (Static library)"]
         SERIAL["Serializer / Deserializer\n(big-endian field packing)"]
         SOCK["TCP Socket Wrappers\n(POSIX / Winsock2)"]
         SERIAL <--> SOCK
@@ -94,7 +94,7 @@ graph TD
         BCAST --> SLOTS
     end
 
-    subgraph DB_LIB["nodesignal_db (static library)"]
+    subgraph DB_LIB["nodesignal_db (Static library)"]
         STMTS["Prepared Statements\n(compiled once at open)"]
         SQLITE["SQLite3\n(WAL mode, FK enforcement)"]
         STMTS --> SQLITE
@@ -179,10 +179,10 @@ graph TD
         ALLOC --> IDLE
     end
 
-    MAIN -->|"acquire lock to read/write\nsocket_fd on connect/disconnect"| LOCK
-    RECV -->|"acquire lock to read\nsocket_fd each iteration"| LOCK
-    IDLE -->|"queues callback onto\nGLib main loop"| CALLBACKS
-    RECV -.->|"never calls GTK directly"| WIDGETS
+    MAIN -->|"Acquire lock to read/write\nsocket_fd on connect/disconnect"| LOCK
+    RECV -->|"Acquire lock to read\nsocket_fd each iteration"| LOCK
+    IDLE -->|"Queues callback onto\nGLib main loop"| CALLBACKS
+    RECV -.->|"Never calls GTK directly"| WIDGETS
 ```
 
 The receiver thread owns the blocking network read path and is the only thread that calls `ns_recv_packet`. It never calls any GTK function. Instead, for each packet it receives, it allocates a small heap struct carrying the packet data and registers it with `g_idle_add`. The GLib main loop picks up each registered callback on the next idle tick and runs it on the main thread, where widget mutation is safe. The callback returns `G_SOURCE_REMOVE` so it fires exactly once and is then discarded.
@@ -230,7 +230,7 @@ graph TD
 
 `nodesignal_db` depends only on SQLite3 and is linked exclusively by the server and the test suite. The client binary has no link dependency on `nodesignal_db` and therefore cannot call any database function, which enforces the architectural rule that only the server touches persistent storage.
 
-`nodesignal_client` is the only target that links GTK4 and pthreads. GTK4 is discovered via `pkg-config` at configure time, so a missing GTK4 development package causes a clear configure-time error rather than a link-time failure. The test target links both static libraries and pthreads so that `test_integration.c` can spawn a server thread in-process.
+`nodesignal_client` is the only target that links GTK4 and pthreads. GTK4 is discovered via `pkg-config` at configure time, so a missing GTK4 development package causes a clear configure time error rather than a link time failure. The test target links both static libraries and pthreads so that `test_integration.c` can spawn a server thread in-process.
 
 ---
 
