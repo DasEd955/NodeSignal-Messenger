@@ -155,6 +155,9 @@ if(BUILD_TESTING)
         tests/test_main.c
         tests/test_packet.c
         tests/test_db.c
+        tests/test_comm.c
+        tests/test_db_extended.c
+        tests/test_integration.c
     )
     target_include_directories(nodesignal_tests
         PRIVATE
