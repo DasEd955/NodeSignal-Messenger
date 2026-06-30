@@ -97,6 +97,7 @@
                     <property name="label">NS</property>
                     <property name="css-classes">ns-app-monogram</property>
                     <property name="halign">center</property>
+                    <property name="margin-top">20</property>
                   </object>
                 </child>
 
@@ -125,6 +126,7 @@
                     <property name="spacing">10</property>
                     <property name="halign">center</property>
                     <property name="margin-top">16</property>
+                    <property name="margin-bottom">20</property>
 
                     <child>
                       <object class="GtkBox">

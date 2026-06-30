@@ -649,16 +649,18 @@ cmake -S . -B build -G Ninja
 cmake --build build -j
 ```
 
-Run the server:
+Run the server from the build directory (ensures SQLite3 DLLs are on PATH):
 
 ```sh
-./build/nodesignal_server.exe 5555 database/messages.db
+cd build
+./nodesignal_server.exe 5555 database/messages.db
 ```
 
-Run one or more clients, each in a separate UCRT64 terminal:
+Run one or more clients, each in a separate UCRT64 terminal (also from the build directory):
 
 ```sh
-./build/nodesignal_client.exe
+cd build
+./nodesignal_client.exe
 ```
 
 On the login screen, enter the server host, port, and username, then click **Connect**. The UI transitions to the two panel chat layout after a successful join.

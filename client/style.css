@@ -49,7 +49,7 @@
 /* Left branding panel */
 .ns-login-brand-panel {
     background: linear-gradient(160deg, #0a6bce 0%, #007aff 55%, #34aadc 100%);
-    min-width: 380px;
+    min-width: 420px;
 }
 
 .ns-app-monogram {
