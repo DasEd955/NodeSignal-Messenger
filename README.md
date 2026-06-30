@@ -1,5 +1,7 @@
 # NodeSignal Messenger
 
+![Application Screenshot](util/UI.png)
+
 A multiclient TCP chat application written in C, built from the protocol layer up. The system consists of a `select()`/`poll()`-based socket server, a shared binary wire protocol, a SQLite persistence layer, and a GTK4 desktop client with a modern two panel macOS inspired UI driven by a background receive thread. Every boundary between components is defined by a narrow, explicitly documented API, and the entire stack is covered by a 2,170 line test suite spanning unit, integration, and end-to-end scenarios.
 
 ## Table of Contents
