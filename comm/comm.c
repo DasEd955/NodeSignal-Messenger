@@ -3,7 +3,7 @@
 Provides cross-platform socket helpers, TCP connect/listen factories, and
 the binary wire protocol used between NodeSignal clients and servers. All
 multibyte header fields are transmitted in big-endian (network) byte order.
-The in-memory NsPacketHeader struct is NOT layout-compatible with the wire
+The in-memory NsPacketHeader struct is NOT layout compatible with the wire
 bytes; ns_send_packet and ns_recv_packet serialize every field individually.
 
 Wire header layout (14 bytes, tightly packed):

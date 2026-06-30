@@ -6,6 +6,11 @@ to chat events. A dedicated background thread (ns_client_receive_loop)
 reads incoming packets and queues GTK-safe idle callbacks so all widget
 updates run on the GTK main thread. The connection_lock mutex protects
 socket_fd, joined, user_id, and the receiver thread handle.
+
+The sidebar labels sidebar_server_label, sidebar_user_label, and
+sidebar_status_dot are supplementary display widgets added in the
+redesigned two-panel layout.  They are looked up non-fatally so the
+application still runs correctly if the UI file predates the redesign.
 */
 
 #include "client.h"
@@ -39,6 +44,11 @@ typedef struct NsUiEvent {
     All GTK widget pointers are valid only after ns_client_on_activate fires.
     Fields protected by connection_lock: socket_fd, transport_connected,
     joined, user_id, receiver_thread, receiver_thread_active.
+
+    sidebar_server_label, sidebar_user_label, and sidebar_status_dot are
+    supplementary widgets from the redesigned two panel layout.  They may
+    be NULL if the UI file does not define them; all writes to them are
+    guarded by NULL checks so the application degrades gracefully.
 */
 struct NsClientApp {
     GtkApplication *application;
@@ -56,6 +66,12 @@ struct NsClientApp {
     GtkTextView *transcript_view;
     GtkTextBuffer *transcript_buffer;
     GtkTextTag *username_tag;
+    GtkLabel *sidebar_server_label;
+    GtkLabel *sidebar_user_label;
+    GtkLabel *sidebar_status_dot;
+    char connected_host[256];
+    char connected_port[64];
+    char connected_username[NS_USERNAME_MAX + 1];
     GMutex connection_lock;
     GThread *receiver_thread;
     gboolean receiver_thread_active;
@@ -74,6 +90,45 @@ struct NsClientApp {
 */
 static void ns_client_set_status(NsClientApp *app, const char *text) {
     gtk_label_set_text(app->status_label, text != NULL ? text : "");
+}
+
+/* ns_client_update_sidebar - Populate or clear the sidebar connection labels.
+
+    Called on the GTK main thread. Writes host:port and username into the
+    sidebar metadata rows introduced by the redesigned two panel layout.
+    All three label pointers are optional; if any is NULL the write is skipped
+    so the function is safe to call regardless of which UI version is loaded.
+
+    Args:
+        app:      Client application whose sidebar labels will be updated.
+        host:     Server hostname string, or NULL to reset to "-".
+        port:     Server port string, or NULL to reset to "-".
+        username: Active username string, or NULL to reset to "-".
+*/
+static void ns_client_update_sidebar(NsClientApp *app, const char *host, const char *port, const char *username) {
+    if(app->sidebar_server_label != NULL) {
+        if(host != NULL && port != NULL) {
+            char addr_buf[320];
+            snprintf(addr_buf, sizeof(addr_buf), "%s:%s", host, port);
+            gtk_label_set_text(app->sidebar_server_label, addr_buf);
+        } else {
+            gtk_label_set_text(app->sidebar_server_label, "-");
+        }
+    }
+
+    if(app->sidebar_user_label != NULL) {
+        gtk_label_set_text(app->sidebar_user_label, username != NULL ? username : "-");
+    }
+
+    if(app->sidebar_status_dot != NULL) {
+        if(host != NULL) {
+            gtk_widget_remove_css_class(GTK_WIDGET(app->sidebar_status_dot), "ns-offline-dot");
+            gtk_widget_add_css_class(GTK_WIDGET(app->sidebar_status_dot), "ns-online-dot");
+        } else {
+            gtk_widget_remove_css_class(GTK_WIDGET(app->sidebar_status_dot), "ns-online-dot");
+            gtk_widget_add_css_class(GTK_WIDGET(app->sidebar_status_dot), "ns-offline-dot");
+        }
+    }
 }
 
 /* ns_client_build_asset_path - Construct an absolute path to a runtime asset file.
@@ -277,6 +332,10 @@ static gboolean ns_client_dispatch_ui_event(gpointer data) {
             ns_client_set_login_sensitive(event->app, FALSE);
             ns_client_set_status(event->app, event->text);
             ns_client_append_line(event->app, event->text);
+            ns_client_update_sidebar(event->app,
+                                     event->app->connected_host,
+                                     event->app->connected_port,
+                                     event->app->connected_username);
             gtk_widget_grab_focus(GTK_WIDGET(event->app->message_entry));
             break;
 
@@ -286,6 +345,7 @@ static gboolean ns_client_dispatch_ui_event(gpointer data) {
             ns_client_set_login_sensitive(event->app, TRUE);
             gtk_stack_set_visible_child(event->app->stack, event->app->login_page);
             ns_client_set_status(event->app, event->text);
+            ns_client_update_sidebar(event->app, NULL, NULL, NULL);
             break;
 
         case NS_UI_STATUS:
@@ -678,6 +738,10 @@ static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) 
 
     ns_client_store_connection(app, socket_fd);
 
+    snprintf(app->connected_host, sizeof(app->connected_host), "%s", host);
+    snprintf(app->connected_port, sizeof(app->connected_port), "%s", port);
+    snprintf(app->connected_username, sizeof(app->connected_username), "%s", username);
+
     ns_client_set_login_sensitive(app, FALSE);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);
     ns_client_set_status(app, "Connecting...");
@@ -810,6 +874,11 @@ static int ns_client_load_ui(NsClientApp *app) {
 
     app->transcript_buffer = gtk_text_view_get_buffer(app->transcript_view);
     app->username_tag = gtk_text_buffer_create_tag(app->transcript_buffer, "username", "weight", PANGO_WEIGHT_BOLD, NULL);
+
+    app->sidebar_server_label = GTK_LABEL(gtk_builder_get_object(builder, "sidebar_server_label"));
+    app->sidebar_user_label   = GTK_LABEL(gtk_builder_get_object(builder, "sidebar_user_label"));
+    app->sidebar_status_dot   = GTK_LABEL(gtk_builder_get_object(builder, "sidebar_status_dot"));
+
     gtk_window_set_application(app->window, app->application);
     gtk_stack_set_visible_child(app->stack, app->login_page);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);

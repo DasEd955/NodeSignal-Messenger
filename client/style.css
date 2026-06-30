@@ -1,42 +1,522 @@
-window {
+/*
+ * style.css -- NodeSignal Messenger GTK4 stylesheet.
+ *
+ * Implements a modern macOS inspired design language:
+ *   - SF Pro / system-ui typography hierarchy
+ *   - iOS blue (#007aff) primary accent
+ *   - Two-panel chat layout: sidebar (#f2f2f7) + main (#ffffff)
+ *   - Rounded corners, subtle shadows, and smooth transitions
+ *   - Bold sender nametags inside the transcript
+ *
+ * Applied globally via gtk_style_context_add_provider_for_display
+ * at GTK_STYLE_PROVIDER_PRIORITY_APPLICATION in client.c.
+ */
+
+/* =========================================================================
+   Base window and header
+   ========================================================================= */
+
+.ns-window {
     background: #ffffff;
-    color: #000000;
+    color: #1c1c1e;
+    font-family: -apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
 }
 
-headerbar {
+.ns-header-bar {
     background: #f5f5f7;
-    color: #000000;
+    color: #1c1c1e;
+    box-shadow: none;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.10);
+    min-height: 44px;
+    padding: 0 12px;
+}
+
+.ns-header-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1c1c1e;
+    letter-spacing: -0.2px;
+}
+
+/* =========================================================================
+   Login page: two column layout
+   ========================================================================= */
+
+.ns-login-root {
+    background: #f2f2f7;
+}
+
+/* Left branding panel */
+.ns-login-brand-panel {
+    background: linear-gradient(160deg, #0a6bce 0%, #007aff 55%, #34aadc 100%);
+    min-width: 380px;
+}
+
+.ns-app-monogram {
+    font-size: 56px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 28px;
+    padding: 20px 28px;
+    letter-spacing: -1px;
+    min-width: 100px;
+    min-height: 100px;
+}
+
+.ns-brand-wordmark {
+    font-size: 32px;
+    font-weight: 700;
+    color: #ffffff;
+    letter-spacing: -0.5px;
+}
+
+.ns-brand-tagline {
+    font-size: 15px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.80);
+    line-height: 1.5;
+}
+
+.ns-feature-bullet {
+    font-size: 16px;
+    color: rgba(255, 255, 255, 0.70);
+}
+
+.ns-feature-text {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.80);
+}
+
+.ns-login-divider {
+    background: rgba(0, 0, 0, 0.08);
+    min-width: 1px;
+    margin: 0;
+}
+
+/* Right form area */
+.ns-login-form-area {
+    background: #f2f2f7;
+    padding: 40px;
+}
+
+/* Login card */
+.ns-login-card {
+    background: #ffffff;
+    border-radius: 16px;
+    border: 1px solid rgba(0, 0, 0, 0.07);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+.ns-login-card-header {
+    padding: 24px 28px 20px 28px;
+    background: #ffffff;
+}
+
+.ns-login-card-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1c1c1e;
+    letter-spacing: -0.3px;
+}
+
+.ns-login-card-subtitle {
+    font-size: 13px;
+    font-weight: 400;
+    color: #6e6e73;
+}
+
+.ns-card-sep {
+    background: rgba(0, 0, 0, 0.07);
+    min-height: 1px;
+    margin: 0;
+}
+
+.ns-login-card-body {
+    padding: 20px 28px 28px 28px;
+}
+
+/* Form field labels */
+.ns-field-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6e6e73;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Form field entries */
+.ns-field-entry {
+    background: #f2f2f7;
+    color: #1c1c1e;
+    border-radius: 10px;
+    border: 1.5px solid rgba(0, 0, 0, 0.08);
+    padding: 10px 14px;
+    font-size: 15px;
+    font-weight: 400;
+    min-height: 42px;
+    box-shadow: none;
+    transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.ns-field-entry:focus {
+    border-color: #007aff;
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+    background: #ffffff;
+    outline: none;
+}
+
+.ns-field-entry text {
+    background: transparent;
+}
+
+/* Status label below fields */
+.ns-status-label {
+    font-size: 12px;
+    font-weight: 400;
+    color: #6e6e73;
+    min-height: 16px;
+}
+
+.ns-status-label.error {
+    color: #ff3b30;
+}
+
+/* Primary connect button */
+.ns-primary-button {
+    background: #007aff;
+    color: #ffffff;
+    border-radius: 10px;
+    border: none;
+    padding: 12px 20px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    min-height: 44px;
+    box-shadow: 0 2px 8px rgba(0, 122, 255, 0.30);
+    transition: background 150ms ease, box-shadow 150ms ease, transform 80ms ease;
+}
+
+.ns-primary-button:hover {
+    background: #0a84ff;
+    box-shadow: 0 4px 14px rgba(0, 122, 255, 0.40);
+}
+
+.ns-primary-button:active {
+    background: #0066d6;
+    box-shadow: 0 1px 4px rgba(0, 122, 255, 0.25);
+}
+
+.ns-primary-button:disabled {
+    background: #c7c7cc;
+    color: rgba(255, 255, 255, 0.70);
     box-shadow: none;
 }
 
-frame {
-    border-radius: 12px;
-    background: #f2f2f7;
-    border: 1px solid rgba(56, 51, 51, 0.08);
-}
+/* =========================================================================
+   Chat page root
+   ========================================================================= */
 
-entry,
-textview {
+.ns-chat-root {
     background: #ffffff;
-    color: #000000;
-    border-radius: 18px;
 }
 
-button {
+/* =========================================================================
+   Sidebar
+   ========================================================================= */
+
+.ns-sidebar {
+    background: #f2f2f7;
+    min-width: 220px;
+}
+
+.ns-sidebar-header {
+    padding: 14px 16px;
+    min-height: 48px;
+    background: #f2f2f7;
+}
+
+.ns-sidebar-header-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1c1c1e;
+}
+
+.ns-online-dot {
+    font-size: 10px;
+    color: #30d158;
+}
+
+.ns-offline-dot {
+    font-size: 10px;
+    color: #8e8e93;
+}
+
+.ns-sidebar-sep {
+    background: rgba(0, 0, 0, 0.08);
+    min-height: 1px;
+    min-width: 1px;
+    margin: 0;
+}
+
+.ns-sidebar-section {
+    padding: 12px 16px 8px 16px;
+}
+
+.ns-sidebar-section-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 4px;
+}
+
+.ns-sidebar-channel-row {
+    padding: 6px 10px;
+    border-radius: 8px;
+}
+
+.ns-sidebar-channel-active {
+    background: rgba(0, 122, 255, 0.12);
+}
+
+.ns-sidebar-channel-row:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.ns-sidebar-channel-active:hover {
+    background: rgba(0, 122, 255, 0.18);
+}
+
+.ns-channel-hash {
+    font-size: 16px;
+    font-weight: 500;
+    color: #007aff;
+}
+
+.ns-channel-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #007aff;
+}
+
+/* Connection metadata */
+.ns-meta-key {
+    font-size: 10px;
+    font-weight: 600;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.ns-meta-value {
+    font-size: 13px;
+    font-weight: 400;
+    color: #3c3c43;
+}
+
+.ns-meta-username {
+    font-weight: 600;
+    color: #007aff;
+}
+
+/* Bottom identity row */
+.ns-sidebar-identity {
+    padding: 12px 16px;
+    background: #eaeaed;
+    min-height: 56px;
+}
+
+.ns-avatar {
+    font-size: 12px;
+    font-weight: 700;
+    color: #ffffff;
+    background: #007aff;
+    border-radius: 50%;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 0;
+}
+
+.ns-identity-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #1c1c1e;
+}
+
+.ns-identity-sub {
+    font-size: 11px;
+    font-weight: 400;
+    color: #8e8e93;
+}
+
+/* =========================================================================
+   Chat main panel
+   ========================================================================= */
+
+.ns-chat-subheader {
+    background: #ffffff;
+    padding: 12px 20px;
+    min-height: 48px;
+    border-bottom: none;
+}
+
+.ns-subheader-hash {
+    font-size: 18px;
+    font-weight: 400;
+    color: #8e8e93;
+}
+
+.ns-subheader-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #1c1c1e;
+    letter-spacing: -0.2px;
+}
+
+.ns-subheader-meta {
+    font-size: 12px;
+    font-weight: 400;
+    color: #8e8e93;
+}
+
+.ns-content-sep {
+    background: rgba(0, 0, 0, 0.07);
+    min-height: 1px;
+    margin: 0;
+}
+
+/* =========================================================================
+   Transcript (message area)
+   ========================================================================= */
+
+.ns-transcript-scroll {
+    background: #ffffff;
+}
+
+.ns-transcript {
+    background: #ffffff;
+    color: #1c1c1e;
+    font-size: 14px;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.55;
+}
+
+/* Bold username tag applied by client.c via GtkTextTag */
+textview text {
+    background: #ffffff;
+    color: #1c1c1e;
+}
+
+/* =========================================================================
+   Input bar
+   ========================================================================= */
+
+.ns-input-bar-container {
+    background: #ffffff;
+}
+
+.ns-input-bar {
+    padding: 12px 20px 16px 20px;
+    background: #ffffff;
+}
+
+.ns-message-entry {
+    background: #f2f2f7;
+    color: #1c1c1e;
+    border-radius: 22px;
+    border: 1.5px solid rgba(0, 0, 0, 0.07);
+    padding: 10px 18px;
+    font-size: 15px;
+    font-weight: 400;
+    min-height: 40px;
+    box-shadow: none;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.ns-message-entry:focus {
+    border-color: rgba(0, 122, 255, 0.45);
+    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.12);
+    background: #ffffff;
+    outline: none;
+}
+
+.ns-message-entry text {
+    background: transparent;
+}
+
+.ns-send-button {
     background: #007aff;
     color: #ffffff;
-    border-radius: 18px;
-    padding: 10px 18px;
+    border-radius: 20px;
+    border: none;
+    padding: 9px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    min-height: 40px;
+    box-shadow: 0 2px 6px rgba(0, 122, 255, 0.28);
+    transition: background 120ms ease, box-shadow 120ms ease;
 }
 
-button:hover {
+.ns-send-button:hover {
     background: #0a84ff;
+    box-shadow: 0 3px 10px rgba(0, 122, 255, 0.38);
 }
 
-label.dim-label {
-    color: #5c5c61;
+.ns-send-button:active {
+    background: #0066d6;
+    box-shadow: 0 1px 3px rgba(0, 122, 255, 0.22);
 }
 
-label.username {
-    font-weight: bold;
+.ns-send-button:disabled {
+    background: #c7c7cc;
+    color: rgba(255, 255, 255, 0.70);
+    box-shadow: none;
+}
+
+/* =========================================================================
+   Scrollbar styling (macOS overlay style thin scrollbars)
+   ========================================================================= */
+
+scrollbar {
+    background: transparent;
+    min-width: 8px;
+    min-height: 8px;
+}
+
+scrollbar trough {
+    background: transparent;
+    border-radius: 4px;
+}
+
+scrollbar slider {
+    background: rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+    min-width: 5px;
+    min-height: 5px;
+    margin: 2px;
+}
+
+scrollbar slider:hover {
+    background: rgba(0, 0, 0, 0.35);
+}
+
+/* =========================================================================
+   Generic entry / textview fallback resets
+   (prevent GTK theme from overriding our custom entries)
+   ========================================================================= */
+
+entry {
+    box-shadow: none;
+    outline: none;
+}
+
+entry undershoot.left,
+entry undershoot.right {
+    background: transparent;
+}
+
+textview border {
+    border: none;
 }

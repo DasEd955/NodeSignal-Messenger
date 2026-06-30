@@ -1,6 +1,6 @@
 # NodeSignal Messenger
 
-A multiclient TCP chat application written in C, built from the protocol layer up. The system consists of a `select()`/`poll()`-based socket server, a shared binary wire protocol, a SQLite persistence layer, and a GTK4 desktop client driven by a background receive thread. Every boundary between components is defined by a narrow, explicitly documented API, and the entire stack is covered by a 2,170 line test suite spanning unit, integration, and end-to-end scenarios.
+A multiclient TCP chat application written in C, built from the protocol layer up. The system consists of a `select()`/`poll()`-based socket server, a shared binary wire protocol, a SQLite persistence layer, and a GTK4 desktop client with a modern two panel macOS inspired UI driven by a background receive thread. Every boundary between components is defined by a narrow, explicitly documented API, and the entire stack is covered by a 2,170 line test suite spanning unit, integration, and end-to-end scenarios.
 
 ## Table of Contents
 
@@ -37,10 +37,10 @@ NodeSignal-Messenger/
 ├── Dockerfile              Docker build environment
 ├── nodesignal_tester.sh   Bash integration test runner
 ├── client/
-│   ├── client.c           GTK4 application, receiver thread, UI callbacks (946 lines)
+│   ├── client.c           GTK4 application, receiver thread, UI callbacks
 │   ├── client.h           Public entry point: ns_client_run()
-│   ├── client.ui          GTK UI definition (XML, login + chat pages)
-│   └── style.css          macOS-inspired stylesheet
+│   ├── client.ui          GTK UI definition (XML, two panel login + chat layout)
+│   └── style.css          Comprehensive macOS inspired stylesheet
 ├── comm/
 │   ├── comm.c             Socket wrappers, serialization, packet I/O (655 lines)
 │   └── comm.h             Public API + full protocol documentation (267 lines)
@@ -240,12 +240,14 @@ graph TD
 
 ### client.c
 
-The application lifecycle follows the standard `GtkApplication` pattern: `ns_client_run` creates a `GtkApplication`, registers a `activate` signal handler that builds the widget tree, and calls `g_application_run`. All widget construction happens in `activate`; there is no global mutable widget state accessible before that signal fires.
+The application lifecycle follows the standard `GtkApplication` pattern: `ns_client_run` creates a `GtkApplication`, registers an `activate` signal handler that builds the widget tree, and calls `g_application_run`. All widget construction happens in `activate`; there is no global mutable widget state accessible before that signal fires.
 
 The UI is split into two pages managed by a `GtkStack` with a crossfade transition:
 
-- **Login page**: Three `GtkEntry` fields (server address, port, username) and a Connect button. The Connect handler reads the three fields, validates that none are empty, and calls `ns_connect_tcp` followed by `ns_send_packet` for `NS_PACKET_JOIN`. If either call fails, the status label is updated with the error string and the UI remains on the login page.
-- **Chat page**: A `GtkScrolledWindow` containing a read-only `GtkTextView` (the transcript), a `GtkEntry` for message input, and a Send button. The Send handler calls `ns_send_packet` for `NS_PACKET_TEXT` and clears the input entry on success.
+- **Login page**: A two column layout. The left panel carries the NodeSignal wordmark, a tagline, and three feature bullets rendered on a blue gradient background. The right panel is a centered card with labeled field groups for server host, port, and username; an inline status label; and a primary Connect button.
+- **Chat page**: A two-panel layout. The left sidebar (`220 px`) shows a green online indicator, the active `# general` channel row, a CONNECTION section displaying the server address and logged in username, and an NS avatar identity row at the bottom. The right main area contains a `# general` subheader bar, a `GtkScrolledWindow` / `GtkTextView` transcript, and a fixed bottom input bar with a pill style message entry and a rounded blue Send button.
+
+**Sidebar connection labels.** Three supplementary widget pointers (`sidebar_server_label`, `sidebar_user_label`, `sidebar_status_dot`) are looked up non-fatally in `ns_client_load_ui`. On `NS_UI_CONNECTED` the new `ns_client_update_sidebar` helper writes the active host, port, and username into those labels and switches the dot to green. On `NS_UI_DISCONNECTED` it resets them to `-` and switches the dot to gray. All writes are NULL-guarded so the application degrades gracefully if the labels are absent.
 
 **Receiver thread.** After a successful join, `client.c` spawns a POSIX thread that loops on `ns_recv_packet`. For each packet received, the thread allocates a small heap struct carrying the packet data, then calls `g_idle_add` with a callback that reads the struct, appends to the `GtkTextView`, and frees the allocation. The callback returns `G_SOURCE_REMOVE` so it fires exactly once. This design means the receiver thread never calls any GTK function; all widget mutations happen on the main thread.
 
@@ -256,17 +258,30 @@ Shared connection state (`socket_fd`, `joined`, `user_id`) is protected by a `GM
 | Event | Effect on UI |
 |---|---|
 | `NS_UI_APPEND_LINE` | Appends a formatted line to the transcript `GtkTextView` |
-| `NS_UI_CONNECTED` | Switches the `GtkStack` to the chat page |
-| `NS_UI_DISCONNECTED` | Switches back to the login page, resets state |
+| `NS_UI_CONNECTED` | Switches the `GtkStack` to the chat page; populates sidebar labels |
+| `NS_UI_DISCONNECTED` | Switches back to the login page; resets sidebar labels |
 | `NS_UI_STATUS` | Updates the status label text |
 
 ### client.ui
 
 Defines the widget tree as a GTK Builder XML file loaded at runtime via `gtk_builder_new_from_file`. The file is copied to `build/assets/client.ui` during CMake configuration so the binary can locate it relative to its executable directory using `ns_get_executable_dir`. UI assets are not embedded in the binary; the executable and the `assets/` directory must be co-located.
 
+All widget IDs referenced by `client.c` are preserved exactly: `main_window`, `main_stack`, `login_page`, `chat_page`, `server_entry`, `port_entry`, `username_entry`, `message_entry`, `connect_button`, `send_button`, `status_label`, `transcript_view`. The three sidebar IDs (`sidebar_server_label`, `sidebar_user_label`, `sidebar_status_dot`) are new additions looked up non-fatally.
+
 ### style.css
 
-Applied globally via `gtk_style_context_add_provider_for_display`. Implements a macOS inspired visual style: white window background, iOS blue (`#007aff`) buttons, light gray header bar (`#f5f5f7`), and rounded corner entries and text views.
+Applied globally via `gtk_style_context_add_provider_for_display` at `GTK_STYLE_PROVIDER_PRIORITY_APPLICATION`. Implements a comprehensive macOS inspired design language using scoped CSS class names (all prefixed `ns-`):
+
+| Area | Key styles |
+|---|---|
+| Login brand panel | Blue gradient background (`#0a6bce` to `#34aadc`), large `NS` monogram circle, white typography |
+| Login card | White card with `border-radius: 16px`, subtle shadow, labeled field groups, field focus ring in iOS blue |
+| Primary button | iOS blue (`#007aff`), `border-radius: 10px`, hover/active/disabled states |
+| Sidebar | Light gray (`#f2f2f7`) background, section labels in uppercase gray, active channel row with blue tint |
+| Online dot | Green (`#30d158`) when connected, gray (`#8e8e93`) when disconnected |
+| Transcript | Clean white background, `SF Pro Text` / system-ui font stack, bold sender names via `GtkTextTag` |
+| Input bar | Pill shaped message entry (`border-radius: 22px`), rounded blue Send button, focus ring on active |
+| Scrollbar | Thin overlay style (`min-width: 5px`), transparent trough, semi-transparent slider |
 
 ---
 
@@ -595,17 +610,19 @@ If you need to select a specific compiler:
 cmake -S . -B build -DCMAKE_C_COMPILER=gcc
 ```
 
-Run the server:
+Run the server (pass a port and a path for the SQLite database):
 
 ```sh
 ./build/nodesignal_server 5555 database/messages.db
 ```
 
-Run one or more clients (each in a separate terminal):
+Run one or more clients, each in a separate terminal. The client window opens at 1100x720 with the two panel login layout:
 
 ```sh
 ./build/nodesignal_client
 ```
+
+On the login screen, enter the server host (default `127.0.0.1`), port (default `5555`), and a username, then click **Connect**. On successful join the UI transitions to the chat panel: the left sidebar shows the server address, your username, and a green online indicator; the right panel shows the `# general` transcript and the message input bar.
 
 Run the test suite:
 
@@ -638,20 +655,22 @@ Run the server:
 ./build/nodesignal_server.exe 5555 database/messages.db
 ```
 
-Run clients:
+Run one or more clients, each in a separate UCRT64 terminal:
 
 ```sh
 ./build/nodesignal_client.exe
 ```
+
+On the login screen, enter the server host, port, and username, then click **Connect**. The UI transitions to the two panel chat layout after a successful join.
 
 ### Windows Packaged Distribution
 
 To produce a self-contained distributable directory:
 
 ```sh
-cmake -S . -B build-win -G Ninja
-cmake --install build-win
-cmake --install build-win --prefix dist
+cmake -S . -B build -G Ninja
+cmake --build build
+cmake --install build --prefix dist
 ```
 
 This produces:
@@ -672,7 +691,7 @@ The install step copies the GTK4 and SQLite3 runtime DLLs into `dist/bin`. The p
 Run from the dist layout:
 
 ```sh
-./dist/bin/nodesignal_server.exe 5555
+./dist/bin/nodesignal_server.exe 5555 dist/bin/database/messages.db
 ./dist/bin/nodesignal_client.exe
 ```
 
@@ -707,3 +726,7 @@ docker run --rm \
 ### Stack
 
 C17 · GTK4 · SQLite3 · CMake · pthreads · Winsock2 (Windows)
+
+### UI Design
+
+The client ships a comprehensive two panel macOS inspired GTK4 interface. All CSS class names are prefixed `ns-` to avoid collisions with the GTK default theme. The login page uses a blue gradient branding panel on the left and a white form card on the right. The chat page uses a `220 px` sidebar for channel and connection metadata alongside a full height transcript and pinned input bar. No external UI toolkit beyond GTK4 is required; the entire interface is defined in `client/client.ui` (GTK Builder XML) and `client/style.css` (GTK CSS).
