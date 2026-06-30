@@ -110,23 +110,19 @@ graph TD
 
 ### Packet Architecture
 
-```
-Byte offset:  0        1        2        3        4        5        6        7
-             +--------+--------+--------+--------+--------+--------+--------+--------+
-             |version |  type  |          sender_id (32b, big-endian)       |  ...   |
-             +--------+--------+--------+--------+--------+--------+--------+--------+
-
-Byte offset:  8        9       10       11       12       13
-             +--------+--------+--------+--------+--------+--------+
-             |    timestamp (32b, big-endian)    | body_len MSB... |
-             +--------+--------+--------+--------+--------+--------+
-
-Byte offset: 14      ...     525
-             +--------+--------+--------+----//----+--------+
-             |        body (0 to 512 bytes, UTF-8)           |
-             +--------+--------+--------+----//----+--------+
-
-Total: 14-byte fixed header + 0..512 byte body  =  14..526 bytes per packet
+```mermaid
+block-beta
+  columns 6
+  block:HEADER["14-byte Fixed Header"]:6
+    version["version\n(1 byte)"]
+    type["type\n(1 byte)"]
+    sender_id["sender_id\n(4 bytes, big-endian)"]
+    timestamp["timestamp\n(4 bytes, big-endian)"]
+    body_len["body_len\n(4 bytes, big-endian)"]
+  end
+  block:BODY["Variable Body"]:6
+    body["body\n(0 to 512 bytes, UTF-8)"]:6
+  end
 ```
 
 Every packet begins with a 14-byte fixed-length header. The `version` byte is checked against `NS_PROTOCOL_VERSION` (currently `1`) on receipt; a mismatch causes the receiver to close the connection immediately. The `type` byte carries one of five `NsPacketType` values that determines how the body is interpreted. `sender_id` is the SQLite `users.id` assigned at join time; the server populates this field when broadcasting messages to other clients. `timestamp` is a Unix epoch value in seconds (32-bit, truncates in 2038). `body_len` is validated against `NS_PACKET_BODY_MAX` (512) before any read is attempted, preventing overflows.
