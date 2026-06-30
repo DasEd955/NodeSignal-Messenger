@@ -78,7 +78,7 @@ static void ns_client_set_status(NsClientApp *app, const char *text) {
 
 /* ns_client_build_asset_path - Construct an absolute path to a runtime asset file.
 
-    Uses g_build_filename so the result is platform-correct. The caller owns
+    Uses g_build_filename so the result is platform correct. The caller owns
     the returned string and must free it with g_free().
 
     Args:

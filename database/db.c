@@ -4,10 +4,10 @@ Manages the database connection lifecycle, schema initialization, and all
 DML operations (user upsert, message insert, message history retrieval).
 
 Prepared statements are compiled once in ns_db_open and reused for the
-lifetime of the connection; callers should not re-open the database between
+lifetime of the connection; callers should not reopen the database between
 operations.  All timestamps are stored as 64-bit integers to avoid the
 Year-2038 truncation that would result from INT/bind_int.  The 32-bit
-wire-protocol timestamp field is a separate, documented limitation.
+wire protocol timestamp field is a separate, documented limitation.
 */
 
 #include "db.h"
@@ -36,7 +36,7 @@ static const char *NS_SCHEMA_SQL =
 
 /* ns_db_find_user_id -- Look up a user's integer ID by username.
 
-Resets and rebinds the pre-compiled stmt_find_user statement rather than
+Resets and rebinds the precompiled stmt_find_user statement rather than
 preparing a new one, keeping overhead per call minimal.
 
 Args:
@@ -314,7 +314,7 @@ const char *ns_db_last_error(const NsDatabase *database) {
 
 /* ns_db_recent_messages -- Fetch the N most recent messages and deliver them oldest-first.
 
-Executes a pre-compiled SELECT (messages JOIN users ORDER BY id DESC LIMIT N),
+Executes a precompiled SELECT (messages JOIN users ORDER BY id DESC LIMIT N),
 buffers the rows internally, then invokes callback in ascending chronological
 order so the caller always receives a conversation-order stream regardless of
 how the query returns rows.

@@ -713,7 +713,7 @@ static void test_listen_connect_tcp(void)
 
     if(((struct sockaddr *) &addr)->sa_family == AF_INET6) {
         addr6 = (struct sockaddr_in6 *) &addr;
-        /* If the listener bound to ::, connect via the IPv4-mapped loopback. */
+        /* If the listener bound to ::, connect via the IPv4 mapped loopback. */
         snprintf(host_str, sizeof(host_str), "::1");
         snprintf(port_str, sizeof(port_str), "%u",
                  (unsigned) ntohs(addr6->sin6_port));

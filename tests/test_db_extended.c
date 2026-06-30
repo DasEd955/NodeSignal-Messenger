@@ -7,7 +7,7 @@ Complements test_db.c with tests that cover:
   - ns_db_recent_messages limit clamping (limit < 1 and limit > 500)
   - ns_db_recent_messages oldest-first ordering guarantee
   - ns_db_recent_messages limit respected (only N rows delivered)
-  - Multi-message history with multiple senders
+  - Multiple message history with multiple senders
   - ns_db_insert_message with null body returns -1
   - ns_db_get_or_create_user with null username returns -1
   - ns_db_recent_messages with null callback returns -1

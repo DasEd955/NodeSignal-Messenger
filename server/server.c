@@ -5,8 +5,8 @@ packets to the appropriate handlers. Uses poll() instead of select() to
 remove the FD_SETSIZE ceiling and support more than 1024 simultaneous
 connections. All client sockets run in non-blocking mode; outbound data is
 queued in per-client ring buffers and drained lazily on POLLOUT so no slow
-receiver can stall a broadcast. A 1-second poll timeout drives the
-auth-timeout sweep (NS_AUTH_TIMEOUT_SECS) and the graceful-shutdown check.
+receiver can stall a broadcast. A 1 second poll timeout drives the
+auth-timeout sweep (NS_AUTH_TIMEOUT_SECS) and the graceful shutdown check.
 SIGINT/SIGTERM (POSIX) or the Windows console handler set
 ns_server_shutdown_requested and the loop exits cleanly on the next wakeup.
 */
@@ -142,7 +142,7 @@ static int ns_client_enqueue_send(NsClient *client, const unsigned char *data, s
     return 0;
 }
 
-/* ns_client_send_buf_pending - Return non-zero if there are bytes waiting to be sent. */
+/* ns_client_send_buf_pending - Return nonzero if there are bytes waiting to be sent. */
 static int ns_client_send_buf_pending(const NsClient *client) {
     return client->send_buf.head != client->send_buf.tail;
 }

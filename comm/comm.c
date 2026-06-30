@@ -2,7 +2,7 @@
 
 Provides cross-platform socket helpers, TCP connect/listen factories, and
 the binary wire protocol used between NodeSignal clients and servers. All
-multi-byte header fields are transmitted in big-endian (network) byte order.
+multibyte header fields are transmitted in big-endian (network) byte order.
 The in-memory NsPacketHeader struct is NOT layout-compatible with the wire
 bytes; ns_send_packet and ns_recv_packet serialize every field individually.
 
@@ -171,14 +171,14 @@ int ns_socket_shutdown(ns_socket_t socket_fd) {
 #endif
 }
 
-/* ns_socket_is_valid - Return non-zero if socket_fd is a usable socket handle. */
+/* ns_socket_is_valid - Return nonzero if socket_fd is a usable socket handle. */
 int ns_socket_is_valid(ns_socket_t socket_fd) {
     return socket_fd != NS_INVALID_SOCKET;
 }
 
 /* ns_unix_time_now - Return the current Unix timestamp as a uint32.
 
-    The uint32 wire field is a known Year-2038 limitation, documented in the
+    The uint32 wire field is a known Year 2038 limitation, documented in the
     threat model. Returns 0 if the system clock reports an error.
 
     Returns:

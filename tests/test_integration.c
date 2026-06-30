@@ -292,7 +292,7 @@ static void test_large_body_fidelity(void)
     int rc = 0;
     size_t i = 0;
 
-    /* Fill with a recognisable non-zero repeating pattern. */
+    /* Fill with a recognisable nonzero repeating pattern. */
     for(i = 0; i < NS_PACKET_BODY_MAX; ++i) {
         body[i] = (char) ('A' + (i % 26));
     }
