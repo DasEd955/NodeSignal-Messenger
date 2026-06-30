@@ -110,15 +110,23 @@ graph TD
 
 ### Packet Architecture
 
-```mermaid
-packet-beta
-  title NS Wire Packet (14-byte fixed header + variable body)
-  0-7: "version (8b)"
-  8-15: "type (8b)"
-  16-47: "sender_id (32b, big-endian)"
-  48-79: "timestamp (32b, big-endian)"
-  80-111: "body_len (32b, big-endian)"
-  112-4207: "body (0 to 512 bytes, UTF-8)"
+```
+Byte offset:  0        1        2        3        4        5        6        7
+             +--------+--------+--------+--------+--------+--------+--------+--------+
+             |version |  type  |          sender_id (32b, big-endian)       |  ...   |
+             +--------+--------+--------+--------+--------+--------+--------+--------+
+
+Byte offset:  8        9       10       11       12       13
+             +--------+--------+--------+--------+--------+--------+
+             |    timestamp (32b, big-endian)    | body_len MSB... |
+             +--------+--------+--------+--------+--------+--------+
+
+Byte offset: 14      ...     525
+             +--------+--------+--------+----//----+--------+
+             |        body (0 to 512 bytes, UTF-8)           |
+             +--------+--------+--------+----//----+--------+
+
+Total: 14-byte fixed header + 0..512 byte body  =  14..526 bytes per packet
 ```
 
 Every packet begins with a 14-byte fixed-length header. The `version` byte is checked against `NS_PROTOCOL_VERSION` (currently `1`) on receipt; a mismatch causes the receiver to close the connection immediately. The `type` byte carries one of five `NsPacketType` values that determines how the body is interpreted. `sender_id` is the SQLite `users.id` assigned at join time; the server populates this field when broadcasting messages to other clients. `timestamp` is a Unix epoch value in seconds (32-bit, truncates in 2038). `body_len` is validated against `NS_PACKET_BODY_MAX` (512) before any read is attempted, preventing overflows.
@@ -149,13 +157,84 @@ sequenceDiagram
 
 The join handshake is the only stateful exchange. After `ACK`, all subsequent `TEXT` packets are routed without further negotiation. Clients that do not complete the join within `NS_AUTH_TIMEOUT_SECS` (10 seconds) are evicted by the server's timeout sweep inside the poll loop.
 
-### Additional Diagrams to Consider
+### Client Threading and UI Event Flow
 
-Two diagrams that would add the most value beyond what is shown above:
+```mermaid
+graph TD
+    subgraph MAIN["GTK Main Thread (main)"]
+        APP["GtkApplication\n(g_application_run)"]
+        ACTIVATE["activate signal handler\n(builds widget tree)"]
+        CALLBACKS["g_idle_add callbacks\n(queued by receiver thread)"]
+        WIDGETS["GtkTextView / GtkStack / GtkEntry\n(all widget mutations happen here)"]
+        APP --> ACTIVATE
+        ACTIVATE --> WIDGETS
+        CALLBACKS --> WIDGETS
+    end
 
-1. **Client Threading and UI Event Flow** -- A detailed diagram showing the two-thread model: the GTK main thread, the receiver thread, the `GMutex`-protected shared state, and the `g_idle_add` dispatch path that routes received packets back onto the GTK main loop. This diagram would be especially useful for understanding why UI mutations are safe and why the receive thread never calls GTK functions directly.
+    subgraph LOCK["GMutex: connection_lock"]
+        SHARED["socket_fd\njoined\nuser_id"]
+    end
 
-2. **CMake Build Graph** -- A directed graph of CMake targets (`nodesignal_comm` -> `nodesignal_db` -> `nodesignal_server`, `nodesignal_comm` -> `nodesignal_client`, `nodesignal_comm` + `nodesignal_db` -> `nodesignal_tests`) with the external library dependencies (GTK4, SQLite3, pthreads, Winsock2) attached as leaf nodes. This makes the linker dependency structure and platform-conditional paths immediately readable without opening `CMakeLists.txt`.
+    subgraph RECV["Receiver Thread (pthread)"]
+        LOOP["blocking ns_recv_packet loop"]
+        ALLOC["heap-allocate packet struct"]
+        IDLE["g_idle_add(callback, struct)"]
+        LOOP --> ALLOC
+        ALLOC --> IDLE
+    end
+
+    MAIN -->|"acquire lock to read/write\nsocket_fd on connect/disconnect"| LOCK
+    RECV -->|"acquire lock to read\nsocket_fd each iteration"| LOCK
+    IDLE -->|"queues callback onto\nGLib main loop"| CALLBACKS
+    RECV -.->|"never calls GTK directly"| WIDGETS
+```
+
+The receiver thread owns the blocking network read path and is the only thread that calls `ns_recv_packet`. It never calls any GTK function. Instead, for each packet it receives, it allocates a small heap struct carrying the packet data and registers it with `g_idle_add`. The GLib main loop picks up each registered callback on the next idle tick and runs it on the main thread, where widget mutation is safe. The callback returns `G_SOURCE_REMOVE` so it fires exactly once and is then discarded.
+
+The `GMutex` (`connection_lock`) guards the three fields that both threads access: `socket_fd`, `joined`, and `user_id`. The main thread holds the lock when initiating or tearing down a connection. The receiver thread acquires it briefly at the top of each loop iteration to read `socket_fd` before calling `ns_recv_packet`. The lock is never held across a blocking call, so neither thread can deadlock waiting on the other while also holding the mutex.
+
+### CMake Build Graph
+
+```mermaid
+graph TD
+    subgraph EXTERNAL["External Dependencies"]
+        GTK4["GTK4\n(pkg-config: gtk4)"]
+        SQLITE3["SQLite3\n(pkg-config: sqlite3)"]
+        PTHREADS["pthreads\n(POSIX / find_package)"]
+        WINSOCK["Winsock2\n(ws2_32, Windows only)"]
+    end
+
+    subgraph STATIC["Static Libraries"]
+        COMM["nodesignal_comm\n(comm/comm.c)"]
+        DB["nodesignal_db\n(database/db.c)"]
+    end
+
+    subgraph BINARIES["Executable Targets"]
+        SERVER["nodesignal_server\n(server/server.c)"]
+        CLIENT["nodesignal_client\n(client/client.c)"]
+        TESTS["nodesignal_tests\n(tests/*.c)"]
+    end
+
+    SQLITE3 --> DB
+    COMM --> SERVER
+    DB --> SERVER
+    WINSOCK -->|"Windows only"| SERVER
+
+    COMM --> CLIENT
+    GTK4 --> CLIENT
+    PTHREADS --> CLIENT
+    WINSOCK -->|"Windows only"| CLIENT
+
+    COMM --> TESTS
+    DB --> TESTS
+    PTHREADS --> TESTS
+```
+
+`nodesignal_comm` is the lowest-level target. It has no internal dependencies on other project libraries and is linked by every binary. It does carry a platform-conditional dependency on Winsock2 (`ws2_32`) on Windows; on POSIX systems the socket API is part of libc and requires no extra link flag.
+
+`nodesignal_db` depends only on SQLite3 and is linked exclusively by the server and the test suite. The client binary has no link dependency on `nodesignal_db` and therefore cannot call any database function, which enforces the architectural rule that only the server touches persistent storage.
+
+`nodesignal_client` is the only target that links GTK4 and pthreads. GTK4 is discovered via `pkg-config` at configure time, so a missing GTK4 development package causes a clear configure-time error rather than a link-time failure. The test target links both static libraries and pthreads so that `test_integration.c` can spawn a server thread in-process.
 
 ---
 
