@@ -1,29 +1,25 @@
-/* ===================================================================================
-db.c -- Implements the SQLite database access logic
-    -- Opens & closes the database connection
-    -- Initializes the database schema 
-    -- Looks up or creates users
-    -- Stores chat messages
-    -- Reports SQLite error messages
-=================================================================================== */
+/* db.c -- SQLite persistence layer for NodeSignal Messenger.
 
+Manages the database connection lifecycle, schema initialization, and all
+DML operations (user upsert, message insert, message history retrieval).
 
-// Implements the public database functions declared in db.h
+Prepared statements are compiled once in ns_db_open and reused for the
+lifetime of the connection; callers should not re-open the database between
+operations.  All timestamps are stored as 64-bit integers to avoid the
+Year-2038 truncation that would result from INT/bind_int.  The 32-bit
+wire-protocol timestamp field is a separate, documented limitation.
+*/
+
 #include "db.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-/* static const char *NS_SCHEMA_SQL -- Stores the SQL schema used to initialize the database
-
-    -- Acts as a string constant containing the SQL statements needed to create the database tables
-    -- Used by ns_db_init_schema() to create the users and messages tables if they do not already exist
-
-    -- Creates the users tables
-    -- Creates the messages table
-    -- Defines the relationship from messages.sender_id to users.id
-    */
+/* Canonical DDL for the NodeSignal schema.
+   schema.sql in the repository root is provided for reference only;
+   this string is the authoritative source.  Keep them in sync manually
+   if the schema changes. */
 static const char *NS_SCHEMA_SQL =
     "CREATE TABLE IF NOT EXISTS users ("
     "    id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -38,35 +34,19 @@ static const char *NS_SCHEMA_SQL =
     ");"
     "CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages (sender_id);";
 
-/* static int ns_db_find_user_id -- Looks up a user's database ID by username
+/* ns_db_find_user_id -- Look up a user's integer ID by username.
 
-    -- Acts as a helper function for retrieving an existing user's ID from the database
-    -- Used internally by ns_db_get_or_create_user() before attempting to insert a new user
-    
-    -- NsDatabase *database: The database structure whose SQLite connection will be used for to query
-    -- const char *username: The username to search for in the users table
-    -- uint32_t *out_user_id: Output parameter that stores the matching user ID if found
+Resets and rebinds the pre-compiled stmt_find_user statement rather than
+preparing a new one, keeping overhead per call minimal.
 
-    -- Delcares sqlite3_stmt *statement = NULL to hold the prepared SQL statement
-    -- Declares int step_result = 0 to store the result of sqlite3_step()
-    -- Declares int rc = 0 to store SQLite return codes
+Args:
+    database:    Open database handle with stmt_find_user compiled.
+    username:    Null-terminated username to search for.
+    out_user_id: Receives the found user ID on success.
 
-    -- Calls sqlite3_prepare_v2() to prepare a SELECT query for the user ID
-    -- If statement preparation fails, return -1
-
-    -- Calls sqlite_bind_text() to bind the given username to the SQL query
-    -- Calls sqlite3_step() to execute the query
-
-    -- If sqlite3_step() returns SQLITE_ROW:
-        -- Reads the user ID from column 0
-        -- Stores the ID in out_user_id
-        -- Finalizes the statement
-        -- Return 0
-    
-    -- If no matching row is found:
-        -- Finalizes the statement
-        -- Return -1
-    */  
+Returns:
+    0 if the user exists and out_user_id is populated, -1 otherwise.
+*/
 static int ns_db_find_user_id(NsDatabase *database, const char *username, uint32_t *out_user_id) {
     sqlite3_stmt *statement = database->stmt_find_user;
     int step_result = 0;
@@ -87,24 +67,19 @@ static int ns_db_find_user_id(NsDatabase *database, const char *username, uint32
     return -1;
 }
 
-/* int ns_db_open -- Opens a SQLite database connection & stores the handle in the database structure
+/* ns_db_open -- Open the SQLite database and compile all prepared statements.
 
-    -- Acts as a public database function for opening a SQLite database file
-    -- Used to initialize an NsDatabase structure before other database operations are performed
+Applies recommended PRAGMAs (foreign_keys, WAL journal mode, busy_timeout)
+immediately after opening.  Compiles the four statements used by the server
+so each DML operation can reset and rebind rather than prepare from scratch.
 
-    -- NsDatabase *database: The database structure that will store the opened SQLite handle
-    -- const char *path: The path to the SQLite database file
+Args:
+    database: Zeroed NsDatabase structure to populate.
+    path:     Filesystem path to the SQLite database file.
 
-    -- If database or path is NULL, return -1
-
-    -- Clears the database structure with memset()
-    -- Calls sqlite3_open() to open the database file & store the handle in database->handle
-    -- If sqlite3_open() fails:
-        -- Calls ns_db_closer() to clean up any partially opened handle
-        -- Return -1
-    
-    -- Return 0 upon success
-    */
+Returns:
+    0 on success, -1 on any failure (database is safe to call ns_db_close on).
+*/
 int ns_db_open(NsDatabase *database, const char *path) {
     if(database == NULL || path == NULL) {
         return -1;
@@ -119,6 +94,14 @@ int ns_db_open(NsDatabase *database, const char *path) {
     sqlite3_exec(database->handle, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL);
     sqlite3_exec(database->handle, "PRAGMA journal_mode = WAL;", NULL, NULL, NULL);
     sqlite3_busy_timeout(database->handle, 5000);
+
+    /* Apply schema DDL before preparing statements so that statement compilation
+       succeeds even on a brand-new or in-memory database. IF NOT EXISTS makes
+       this idempotent when called against an existing on-disk database. */
+    if(sqlite3_exec(database->handle, NS_SCHEMA_SQL, NULL, NULL, NULL) != SQLITE_OK) {
+        ns_db_close(database);
+        return -1;
+    }
 
     if(sqlite3_prepare_v2(database->handle,
             "SELECT id FROM users WHERE username = ?1;",
@@ -153,17 +136,14 @@ int ns_db_open(NsDatabase *database, const char *path) {
     return 0;
 }
 
-/* void ns_db_close -- Closes an open SQLite database connection & clears the stored handle
+/* ns_db_close -- Finalize all prepared statements and close the database connection.
 
-    -- Acts as a public database function for safely closing a SQLite database connection
-    -- Used when the program is finished using the database or when cleanup is needed after an error
-    
-    -- NsDatabase *database: The database structure whose SQLite handle should be closed
+Safe to call on a partially initialized database (e.g., after a failed
+ns_db_open) because each statement pointer is checked before finalization.
 
-    -- If database or database->handle is NULL, return immediately
-    -- Calls sqlite3_close() to close the SQLite connection
-    -- Sets database->handle to NULL so the structure no longer points to a closed connection
-    */
+Args:
+    database: Database handle to tear down; ignored if NULL or already closed.
+*/
 void ns_db_close(NsDatabase *database) {
     if(database == NULL || database->handle == NULL) {
         return;
@@ -190,27 +170,17 @@ void ns_db_close(NsDatabase *database) {
     database->handle = NULL;
 }
 
-/* int ns_db_init_schema -- Initializes the database schema using the SQL schema string 
+/* ns_db_init_schema -- Execute the DDL to create tables and indexes if absent.
 
-    -- Acts as a public database function for creating the required database tables
-    -- Used after opening the database connection to ensure the schema exists before other database operations
-    
-    -- NsDatabase *database: The database structure whos SQLite connection will be used to create the schema
+Idempotent: uses CREATE TABLE IF NOT EXISTS so re-running on an existing
+database is safe.
 
-    -- Declares char *error_message = NULL to store any SQLite error message returned by sqlite3_exec()
-    -- Declares int rc = 0 to store the SQLite return value
+Args:
+    database: Open database handle.
 
-    -- If database or database->handle is NULL, return -1
-
-    -- Calls sqlite3_exec() to execute NS_SCHEMA_SQL on the open database connection
-    -- If sqlite3_exec() does not return SQLITE_OK:
-        -- Checks whether SQLite provided an error message
-        -- If an error message exists:
-            -- Prints the schema error to stderr & frees the SQLite error message with sqlite3_free()
-        -- Return -1
-    
-    -- Return 0 upon success
-    */
+Returns:
+    0 on success, -1 on SQL error (message printed to stderr).
+*/
 int ns_db_init_schema(NsDatabase *database) {
     char *error_message = NULL;
     int rc = 0;
@@ -231,38 +201,21 @@ int ns_db_init_schema(NsDatabase *database) {
     return 0;
 }
 
-/* int ns_db_get_or_create_user -- Retrieves an existing user's ID or creates a new user in the database
+/* ns_db_get_or_create_user -- Atomically ensure a user row exists and return its ID.
 
-    -- Acts as a public database function for ensuring that a username exists in the users table 
-    -- Used when the server needs a valid database user ID for a client joining the chat
+Wraps the INSERT OR IGNORE + SELECT in a BEGIN IMMEDIATE transaction to prevent
+a race between two concurrent JOIN requests for the same new username (the
+single-threaded server makes this race hypothetical today, but the correct
+pattern is documented here for future multi-threaded use).
 
-    -- NsDatabase *database: The database structure whose SQLite connection will be used for the lookup or insertion
-    -- const char *username: The username to search for or insert into the users table
-    -- uint32_t *out_user_id: Output parameter that stores the user's database ID
+Args:
+    database:    Open database handle.
+    username:    Username to upsert.
+    out_user_id: Receives the user's integer ID on success.
 
-    -- Declares sqlite3_stmt *statement = NULL to hold the prepared insert statement
-    -- Declares int rc = 0 to store SQLite return codes
-    -- Declares int step_result = 0 to store the result of sqlite3_step()
-
-    -- If database or database->handle or username or out_user_id is NULL, return -1
-
-    -- Calls ns_db_find_user_id() to check whether the user already exists
-    -- If the user is found:
-        -- Stores the existing user ID in out_user_id & returns 0
-    
-    -- Calls sqlite3_prepare_v2() to prepare an INSERT statement for a new user
-    -- If statement preparation fails, returns - 1
-
-    -- Calls sqlite3_bind_text() to bind the username into the INSERT statement
-    -- Calls sqlite3_bind_int() to bind the current Unix time as created_at
-    
-    -- Calls sqlite3_step() to execute the INSERT statement
-    -- Finalizes the statement with sqlite3_finalize()
-    -- If sqlite3_step() does not return SQLITE_DONE, returns -1
-
-    -- Calls sqlite3_last_insert_rowid() to get the ID of the newly inserted user
-    -- Stores that ID in out_user_id & returns 0 upon success
-    */
+Returns:
+    0 on success with out_user_id populated, -1 on any failure.
+*/
 int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_t *out_user_id) {
     sqlite3_stmt *statement = NULL;
     int rc = 0;
@@ -305,32 +258,20 @@ int ns_db_get_or_create_user(NsDatabase *database, const char *username, uint32_
     return ns_db_find_user_id(database, username, out_user_id);
 }
 
-/* int ns_db_insert_message -- Inserts a new message into the messages table
+/* ns_db_insert_message -- Persist a single chat message linked to its sender.
 
-    -- Acts as a public database function for storing a chat message in the database
-    -- Used when the server receives a valid message from a connected client
+Uses a pre-compiled statement; timestamps are bound as 64-bit integers to
+avoid the Year-2038 truncation of bind_int.
 
-    -- NsDatabase *database: The database structure whose SQLite connection will be used to insert the message
-    -- uint32_t sender_id: The database ID of the user who sent the message
-    -- const char *body: The text body of the message
-    -- uint32_t timestamp: The Unix timestamp representing when the message was sent
+Args:
+    database:  Open database handle.
+    sender_id: Database user ID of the message author.
+    body:      Null-terminated message text.
+    timestamp: Unix timestamp (seconds) when the message was sent.
 
-    -- Declares sqlite3_stmt *statement = NULL to hold the prepared INSERT statement
-    -- Declares int rc = 0 to store SQLite return codes
-    -- Declares int step_result = 0 to store the result of sqlite3_step()
-
-    -- If database or database->handle or body is NULL, returns -1
-
-    -- Calls sqlite3_bind_int() to bind sender_id into the INSERT statement
-    -- Calls sqlite3_bind_text() to bind the message body into the INSERT statement
-    -- Calls sqlite3_bind_int() to bind the timestamp into the INSERT statement
-
-    -- Calls sqlite3_step() to execute the INSERT statement
-    -- Finalizes the statement with sqlite3_finalize()
-
-    -- Returns 0 if sqlite3_step() returns SQLITE_DONE
-    -- Otherwise returns -1
-    */
+Returns:
+    0 on success, -1 on failure.
+*/
 int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *body, uint32_t timestamp) {
     sqlite3_stmt *statement = NULL;
     int step_result = 0;
@@ -354,20 +295,15 @@ int ns_db_insert_message(NsDatabase *database, uint32_t sender_id, const char *b
     return step_result == SQLITE_DONE ? 0 : -1;
 }
 
-/* const char *ns_db_last_error -- Returns the most recent SQLite error message for the database connection
+/* ns_db_last_error -- Return the human-readable SQLite error string for the last operation.
 
-    -- Acts as a public database function for retrieving readable database error messages
-    -- Used when other parts of the program need to report why a database operation failed
+Args:
+    database: Database handle to query; may be NULL.
 
-    -- const NsDatabase *database: The database structure whose SQLite connection will be checked for the last error
-
-    -- If database pr database->handle is NULL:
-        -- Returns the string "Database Unavailable"
-    
-    -- Otherwise:
-        -- Calls sqlite3_errmsg() to retrieve the most recent SQLite error message
-        -- Returns that error message string
-    */
+Returns:
+    A pointer owned by SQLite (valid until the next database call on this
+    handle), or "Database Unavailable" if the handle is NULL.
+*/
 const char *ns_db_last_error(const NsDatabase *database) {
     if(database == NULL || database->handle == NULL) {
         return "Database Unavailable";
@@ -376,24 +312,26 @@ const char *ns_db_last_error(const NsDatabase *database) {
     return sqlite3_errmsg(database->handle);
 }
 
-/* int ns_db_recent_messages -- Retrieves the N most recent messages joined with sender usernames
+/* ns_db_recent_messages -- Fetch the N most recent messages and deliver them oldest-first.
 
-    -- Executes a pre-compiled SELECT against messages JOIN users ORDER BY id DESC LIMIT ?1
-    -- Results are collected into a temporary buffer then delivered to the callback in
-       ascending chronological order so the caller sees oldest-first output.
+Executes a pre-compiled SELECT (messages JOIN users ORDER BY id DESC LIMIT N),
+buffers the rows internally, then invokes callback in ascending chronological
+order so the caller always receives a conversation-order stream regardless of
+how the query returns rows.
 
-    -- NsDatabase *database: open database handle
-    -- int limit: max rows to fetch; clamped to [1, 500]
-    -- NsMessageCallback callback: invoked once per row (username, body, sent_at, userdata)
-    -- void *userdata: passed unchanged to each callback invocation
+Args:
+    database: Open database handle.
+    limit:    Maximum rows to return; clamped to [1, 500].
+    callback: Called once per row with (username, body, sent_at, userdata).
+    userdata: Passed unchanged to every callback invocation.
 
-    -- Returns 0 on success or -1 on failure
-    */
+Returns:
+    0 on success, -1 on invalid arguments or statement failure.
+*/
 int ns_db_recent_messages(NsDatabase *database, int limit,
                            NsMessageCallback callback, void *userdata) {
     sqlite3_stmt *statement = NULL;
 
-    /* row buffer to reverse DESC into ascending order before delivering */
     struct NsHistoryRow {
         char username[64];
         char body[513];
@@ -438,7 +376,7 @@ int ns_db_recent_messages(NsDatabase *database, int limit,
         ++count;
     }
 
-    /* deliver oldest-first (reverse the DESC result set) */
+    /* Deliver oldest-first by reversing the DESC result set. */
     for(i = count - 1; i >= 0; --i) {
         callback(rows[i].username, rows[i].body, rows[i].sent_at, userdata);
     }

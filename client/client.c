@@ -1,11 +1,12 @@
-/* ===================================================================================
-client.c -- Implements the NodeSignal client application
-    -- Creates & manages the GTK user interface
-    -- Connects to the server over TCP
-    -- Sends & receives protocol packets
-    -- Updates the UI based on connection & chat events
-    -- Runs a background receive loop for incoming messages
-=================================================================================== */
+/* client.c - NodeSignal Messenger GTK4 client application.
+
+Creates and manages the GTK user interface, connects to the server over
+TCP, sends and receives protocol packets, and updates the UI in response
+to chat events. A dedicated background thread (ns_client_receive_loop)
+reads incoming packets and queues GTK-safe idle callbacks so all widget
+updates run on the GTK main thread. The connection_lock mutex protects
+socket_fd, joined, user_id, and the receiver thread handle.
+*/
 
 #include "client.h"
 
@@ -17,16 +18,6 @@ client.c -- Implements the NodeSignal client application
 #include <stdlib.h>
 #include <string.h>
 
-/* typedef enum NsUiEventType -- Represents the different types of UI events used by the client
-
-    -- Defines the event types queued from background networking logic
-    -- Used so UI updates can safely run on the GTK main thread
-
-    -- NS_UI_APPEND_LINE: Appends a new line of text to the chat transcript
-    -- NS_UI_CONNECTED: Updates the UI after a successful connection & join
-    -- NS_UI_DISCONNECTED: Updates the UI after the client disconnects
-    -- NS_UI_STATUS: Updates the status label text in the client UI
-    */
 typedef enum NsUiEventType {
     NS_UI_APPEND_LINE = 1,
     NS_UI_CONNECTED = 2,
@@ -34,19 +25,8 @@ typedef enum NsUiEventType {
     NS_UI_STATUS = 4
 } NsUiEventType;
 
-/* typedef struct NsClientApp -- Forward declaration of the main client application structure
-
-    -- Allows the program to reference NsClientApp before its full structure definition appears later in the file
-    */
 typedef struct NsClientApp NsClientApp;
 
-/* typedef struct NsUiEvent -- Represents a UI event queued from background logic to the GTK main thread
-
-    -- NsClientApp *app: The client application instance associated with the event
-    -- NsUiEventType type: The type of UI event being queued
-    -- char *text: The text payload associated with the event
-    -- uint32_t user_id: The user ID associated with the event when needed
-    */
 typedef struct NsUiEvent {
     NsClientApp *app;
     NsUiEventType type;
@@ -54,32 +34,12 @@ typedef struct NsUiEvent {
     uint32_t user_id;
 } NsUiEvent;
 
-/* struct NsClientApp -- Represents the overall state of the client application
+/* NsClientApp - Complete runtime state of the GTK client.
 
-    -- GtkApplication *application: The GTK application instance for the client
-    -- GtkWindow *window: The main application window
-    -- GtkStack *stack: The GTK stack used to switch between the login & chat pages
-    
-    -- GtkWidget *login_page: The login page shown before connecting
-    -- GtkWidget *chat_page: The chat page shown after connecting
-    -- GtkEntry *server_entry: The text entry for the server address
-    -- GtkEntry *port_entry: The text entry for the server port
-    -- GtkEntry *username_entry: The text entry for the username
-    -- GtkEntry *message_entry: The text entry for composing chat messages
-    -- GtkButton *connect_button: The button used to connect to the server
-    -- GtkButton *send_button: The button used to send a chat message
-    
-    -- GtkLabel *status_label: The label used to display connection or status messages
-    -- GtkTextView *transcript_view: The text view used to display the chat transcript
-    -- GtkTextBuffer *transcript_buffer: The text buffer backing the transcript view
-    
-    -- GMutex connection_lock: The mutex used to protect shared connection state
-    -- GThread *receiver_thread: The background thread used to receive incoming packets
-    -- ns_socket_t socket_fd: The socket connected to the server
-    -- gboolean transport_connected: Whether the TCP transport connection is active
-    -- gboolean joined: Whether the client has successfully joined the chat
-    -- uint32_t user_id: The user ID assigned by the server after joining
-    */
+    All GTK widget pointers are valid only after ns_client_on_activate fires.
+    Fields protected by connection_lock: socket_fd, transport_connected,
+    joined, user_id, receiver_thread, receiver_thread_active.
+*/
 struct NsClientApp {
     GtkApplication *application;
     GtkWindow *window;
@@ -106,49 +66,43 @@ struct NsClientApp {
     char *asset_dir;
 };
 
-/* static void ns_client_set_status -- Updates the client's status label text
+/* ns_client_set_status - Update the status label text.
 
-    -- Acts as a helper function for displaying status messages in the UI
-    -- Used when the client needs to show connection, error, or general state messages
-
-    -- NsClientApp *app: The client application whose status label will be updated
-    -- const char *text: The status text to display
-
-    -- Calls gtk_label_set_text() to update the status label
-    -- If text is NULL, displays an empty string instead
-    */
+    Args:
+        app:  Client application whose status_label will be updated.
+        text: Text to display; NULL is treated as an empty string.
+*/
 static void ns_client_set_status(NsClientApp *app, const char *text) {
     gtk_label_set_text(app->status_label, text != NULL ? text : "");
 }
 
-/* static char *ns_client_build_asset_path -- Builds the absolute path to a runtime asset
+/* ns_client_build_asset_path - Construct an absolute path to a runtime asset file.
 
-    -- Acts as a helper function for locating packaged client files relative to the executable
-    -- Used when the client needs to load client.ui or style.css from the installed assets directory
+    Uses g_build_filename so the result is platform-correct. The caller owns
+    the returned string and must free it with g_free().
 
-    -- const NsClientApp *app: The client application containing the resolved asset directory
-    -- const char *filename: The asset file name to append to the asset directory
+    Args:
+        app:      Client application containing the resolved asset directory.
+        filename: Asset filename to append (e.g., "client.ui" or "style.css").
 
-    -- Calls g_build_filename() to construct and return the full asset path
-    */
+    Returns:
+        char*: Heap-allocated absolute path string.
+*/
 static char *ns_client_build_asset_path(const NsClientApp *app, const char *filename) {
     return g_build_filename(app->asset_dir, filename, NULL);
 }
 
-/* static gboolean ns_client_scroll_to_bottom -- Scrolls the chat transcript view to the most recent line
+/* ns_client_scroll_to_bottom - Scroll the transcript to the most recent line.
 
-    -- Acts as a helper function for ensuring the latest appended text is visible in the transcript
-    -- Used as an idle callback so scrolling occurs after GTK has completed layout and rendering
+    Registered as a one-shot g_idle_add callback so scrolling happens after
+    GTK has completed layout and rendering for the newly appended text.
 
-    -- gpointer data: Pointer to the NsClientApp structure for the running client
+    Args:
+        data: Pointer to NsClientApp.
 
-    -- Casts data to NsClientApp *app
-    -- Retrieves the insert mark from the transcript buffer, which represents the current cursor position
-    -- Calls gtk_text_view_scroll_to_mark() to scroll the transcript view so the insert mark is visible
-        -- Uses vertical alignment of 1.0 to position the view at the bottom of the buffer
-
-    -- Returns G_SOURCE_REMOVE so the idle callback runs only once
-    */
+    Returns:
+        gboolean: G_SOURCE_REMOVE so the callback runs exactly once.
+*/
 static gboolean ns_client_scroll_to_bottom(gpointer data) {
     NsClientApp *app = (NsClientApp *)data;
 
@@ -160,26 +114,23 @@ static gboolean ns_client_scroll_to_bottom(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-/* static void ns_client_append_line -- Appends a line of text to the chat transcript view
+/* ns_client_append_line - Append one line of text to the chat transcript view.
 
-    -- Acts as a helper function for adding new chat or status lines to the transcript
-    -- Used when the client needs to display incoming messages or local status updates
+    If the line contains a colon that is not the first character, the text
+    before the colon is rendered with the bold username_tag so sender names
+    stand out visually.
 
-    -- NsClientApp *app: The client application whose transcript will be added
-    -- const char *line: The line of text to append to the transcript
+    At each step:
+        1. Returns immediately if line is NULL or empty.
+        2. Searches for a colon separator to identify a "username: message" format.
+        3. Inserts the username portion with the bold tag (if applicable).
+        4. Inserts the remainder of the line followed by a newline character.
+        5. Moves the buffer cursor to the end and queues a scroll-to-bottom idle call.
 
-    -- Declares GtkTextIter end to track the end position of the transcript buffer
-
-    -- If line is NULL or an empty string:
-        -- Returns immediately
-    
-    -- Calls gtk_text_buffer_get_end_iter() to move end to the end of the transcript
-    -- Calls gtk_text_buffer_insert() to append the given line
-    -- Calls gtk_text_buffer_insert() again to append a newline
-    -- Updates end to the new end of the transcript
-    -- Calls gtk_text_buffer_place_cursor() to move the text cursor to the end of transcript
-    -- Calls gtk_text_view_scroll_mark_onscreen() to keep the latest appended text visible
-    */
+    Args:
+        app:  Client application whose transcript_buffer receives the line.
+        line: Null-terminated text to append.
+*/
 static void ns_client_append_line(NsClientApp *app, const char *line) {
     GtkTextIter end;
 
@@ -210,18 +161,15 @@ static void ns_client_append_line(NsClientApp *app, const char *line) {
     g_idle_add(ns_client_scroll_to_bottom, app);
 }
 
-/* static void ns_client_set_login_sensitive -- Enables or disables the login controls in the client UI
+/* ns_client_set_login_sensitive - Enable or disable the login form widgets.
 
-    -- Acts as a helper function for changing whether the login related widgets can be edited or clicked
-    -- Used when the client connects or disconnects so the login form reflects the current state 
+    Called when connecting (disable) or disconnecting (enable) so the user
+    cannot change fields while a connection attempt is in progress.
 
-    -- NsClientApp *app: The client application whose login widgets will be updated
-    -- gboolean sensitive: Whether the login widgets should be enabled or disabled
-
-    -- Calls gtk_widget_set_sensitive() on:
-        -- The server, port, and username entries
-        -- The connect button
-    */
+    Args:
+        app:       Client application whose login widgets will be updated.
+        sensitive: TRUE to enable the widgets, FALSE to disable them.
+*/
 static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) {
     gtk_widget_set_sensitive(GTK_WIDGET(app->server_entry), sensitive);
     gtk_widget_set_sensitive(GTK_WIDGET(app->port_entry), sensitive);
@@ -229,20 +177,15 @@ static void ns_client_set_login_sensitive(NsClientApp *app, gboolean sensitive) 
     gtk_widget_set_sensitive(GTK_WIDGET(app->connect_button), sensitive);
 }
 
-/* static void ns_client_join_receiver_thread -- Joins the background receiver thread if one is active
+/* ns_client_join_receiver_thread - Join the background receiver thread if one is running.
 
-    -- Acts as a helper function for cleaning up the client's receive thread
-    -- Used when the client disconnects or shuts down & must wait for the background thread to finish
+    Takes receiver_thread and clears receiver_thread_active under the lock,
+    then calls g_thread_join() outside the lock so the main thread can never
+    join itself. Safe to call if no thread is active (returns immediately).
 
-    -- NsClientApp *app: The client application whose receiver thread will be joind
-
-    -- Declares GThread *thread & stores app->receiver_thread in it 
-    -- If thread is NULL:
-        -- Returns immediately
-    
-    -- Sets app->receiver_thread to NULL
-    -- calls g_thread_join() to wait for the receiver thread to finish
-    */
+    Args:
+        app: Client application whose receiver thread will be joined.
+*/
 static void ns_client_join_receiver_thread(NsClientApp *app) {
     GThread *thread = NULL;
 
@@ -261,29 +204,20 @@ static void ns_client_join_receiver_thread(NsClientApp *app) {
     }
 }
 
-/* static ns_socket_t ns_client_take_socket -- Removes the active socket from the client state & resets connection fields
+/* ns_client_take_socket - Remove and return the active socket from shared state.
 
-    -- Acts as a helper function for safely taking ownership of the current socket while clearing the shared client state
-    -- Used when the client disconnects or shuts down & needs to detach the socket from the application state
+    Atomically clears socket_fd, transport_connected, joined, and user_id
+    under connection_lock so the caller gets exclusive ownership of the
+    socket before performing shutdown/close operations.
 
-    -- NsClientApp *app: The client application whose socket & connection state will be updated
-    -- gboolean *was_joined: Optional output parameter that stores whether the client had joined the chat
-    -- uint32_t *user_id: Optional output parameter that stores the client's current user ID
+    Args:
+        app:        Client application whose socket will be taken.
+        was_joined: If non-NULL, receives the prior joined state.
+        user_id:    If non-NULL, receives the prior user_id.
 
-    -- Declares ns_socket_t socket_fd = NS_INVALID_SOCKET to store the socket taken from the client state
-
-    -- Locks app->connection_lock with g_mutex_lock()
-    -- Copies app->socket_fd into socket_fd
-    -- Sets app->socket_fd to NS_INVALID_SOCKET
-
-    -- If was_joined is not NULL:
-        -- Stores app->joined in *was_joined
-    
-    -- If user_id is not NULL:
-        -- Stores app->user_id in *user_id
-
-    -- Returns the socket that was removed from the client state
-    */
+    Returns:
+        ns_socket_t: The socket that was removed (may be NS_INVALID_SOCKET).
+*/
 static ns_socket_t ns_client_take_socket(NsClientApp *app, gboolean *was_joined, uint32_t *user_id) {
     ns_socket_t socket_fd = NS_INVALID_SOCKET;
 
@@ -306,39 +240,29 @@ static ns_socket_t ns_client_take_socket(NsClientApp *app, gboolean *was_joined,
     return socket_fd;
 }
 
-/* static gboolean ns_client_dispatch_ui_event -- Applies a queued UI event on the GTK main thread
+/* ns_client_dispatch_ui_event - Apply a queued UI event on the GTK main thread.
 
-    -- Acts as a helper function for processing UI updates that were queued from the background client logic
-    -- Used by g_idle_add() so that UI changes happen safely on the GTK main thread
+    Called by GLib's main loop via g_idle_add(). Dispatches the event type
+    to the appropriate GTK operations, then frees the event and its text.
 
-    -- gpointer data: Pointer to an NSUiEvent structure describing the UI action to perform
+    At each step:
+        1. Switches on event->type to choose the correct UI action.
+        2. NS_UI_APPEND_LINE: appends event->text to the transcript.
+        3. NS_UI_CONNECTED: switches to the chat page, enables the send button,
+           disables login controls, updates the status label, appends the
+           connection message, and focuses the message entry.
+        4. NS_UI_DISCONNECTED: joins the receiver thread, disables the send
+           button, re-enables login controls, switches back to the login page,
+           and updates the status label.
+        5. NS_UI_STATUS: updates the status label only.
+        6. Frees event->text and the NsUiEvent allocation.
 
-    -- Casts data to NSUiEvent *event
+    Args:
+        data: Pointer to an NsUiEvent describing the action.
 
-    -- Checks event->type & performs the matching GUI action:
-        -- NS_UI_APPEND_LINE:
-            -- Appends event->text to the transcript
-        -- NS_UI_CONNECTED:
-            -- Switches to the chat page
-            -- Enables the send button
-            -- Disables the login controls
-            -- Updates the status label
-            -- Appends the connection message to the transcript
-            -- Moves keyboard focus to the message entry
-        -- NS_UI_DISCONNECTED:
-            -- Joins the receiver thread
-            -- Disables the send button
-            -- Re-enables the login controls
-            -- Switches back to the login controls
-            -- Updates the status label
-        -- NS_UI_STATUS:
-            -- Updates the status label only
-        -- default:
-            -- Performs no action
-    
-    -- Frees event->text & the NsUiEvent structure
-    -- Returns G_SOURCE_REMOVE so that the idle callback only runs once
-    */
+    Returns:
+        gboolean: G_SOURCE_REMOVE so the callback runs exactly once.
+*/
 static gboolean ns_client_dispatch_ui_event(gpointer data) {
     NsUiEvent *event = (NsUiEvent *) data;
 
@@ -376,21 +300,18 @@ static gboolean ns_client_dispatch_ui_event(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
-/* static void ns_client_queue_ui_event -- Queues a UI event to be processed later on the GTK main thread
+/* ns_client_queue_ui_event - Queue a UI event for dispatch on the GTK main thread.
 
-    -- Acts as a helper function for safely requesting UI updates from background logic, such as the receive thread
-    -- Used when the client needs to update GTK widgets without touching them directly from another thread
+    Allocates an NsUiEvent and schedules ns_client_dispatch_ui_event via
+    g_idle_add() so widget updates are always performed on the correct thread,
+    regardless of which thread calls this function.
 
-    -- NsClientApp *app: The client application associated with the queued event
-    -- NsUiEventType type: The type of UI event to queue
-    -- const char *text: The text payload associated with the event
-    -- uint32_t user_id: The user ID associated with the event when needed
-
-    -- Allocates a new NsUiEvent with g_new0()
-    -- Stores app, type, and user_id in the event
-    -- Duplicates text with g_strdup(), using an empty string if text is NULL
-    -- Calls g_idle_add() to queue ns_client_dispatch_ui_event() on the GTK main thread
-    */
+    Args:
+        app:     Client application associated with the event.
+        type:    NsUiEventType describing which UI action to perform.
+        text:    Text payload; duplicated with g_strdup (NULL becomes "").
+        user_id: User ID associated with the event when relevant.
+*/
 static void ns_client_queue_ui_event(NsClientApp *app, NsUiEventType type, const char *text, uint32_t user_id) {
     NsUiEvent *event = g_new0(NsUiEvent, 1);
 
@@ -401,21 +322,16 @@ static void ns_client_queue_ui_event(NsClientApp *app, NsUiEventType type, const
     g_idle_add(ns_client_dispatch_ui_event, event);
 }
 
-/* static void ns_client_send_leave_if_needed -- Sends a LEAVE packet if the client was joined
+/* ns_client_send_leave_if_needed - Send a LEAVE packet to the server if appropriate.
 
-    -- Acts as a helper function for notifying the server that the client is leaving
-    -- Used when the client disconnects and notify_server is requested
+    Only sends if notify_server is TRUE and the client had previously joined.
 
-    -- ns_socket_t socket_fd: The active socket connected to the server
-    -- gboolean notify_server: Whether the client should send a LEAVE packet
-    -- gboolean was_joined: Whether the client had successfully joined the chat
-    -- uint32_t user_id: The client’s assigned user ID
-
-    -- Declares NsPacket leave_packet
-    -- If notify_server is false or the client had not joined, returns immediately
-    -- Calls ns_packet_set() to build a LEAVE packet
-    -- If packet creation succeeds, calls ns_send_packet() to send the packet
-    */
+    Args:
+        socket_fd:     Active socket connected to the server.
+        notify_server: Whether the client should notify the server.
+        was_joined:    Whether the client had successfully joined the chat.
+        user_id:       The client's assigned user ID to embed in the packet.
+*/
 static void ns_client_send_leave_if_needed(ns_socket_t socket_fd, gboolean notify_server, gboolean was_joined, uint32_t user_id) {
     NsPacket leave_packet;
 
@@ -428,18 +344,7 @@ static void ns_client_send_leave_if_needed(ns_socket_t socket_fd, gboolean notif
     }
 }
 
-/* static void ns_client_close_socket -- Safely shuts down and closes a socket
-
-    -- Acts as a helper function for cleaning up a network socket
-    -- Used by ns_client_disconnect() and other connection teardown code
-
-    -- ns_socket_t socket_fd: The socket to close
-
-    -- Checks if the socket is valid using ns_socket_is_valid()
-        -- If invalid, returns immediately
-    -- Calls ns_socket_shutdown() to shut down the socket
-    -- Calls ns_socket_close() to release the socket resources
-    */
+/* ns_client_close_socket - Shut down and close socket_fd if it is valid. */
 static void ns_client_close_socket(ns_socket_t socket_fd) {
     if(!ns_socket_is_valid(socket_fd)) {
         return;
@@ -449,25 +354,19 @@ static void ns_client_close_socket(ns_socket_t socket_fd) {
     ns_socket_close(socket_fd);
 }
 
-/* static void ns_client_disconnect -- Safely disconnects the client and resets connection state
+/* ns_client_disconnect - Safely disconnect the client and reset all connection state.
 
-    -- Handles both voluntary disconnects and unexpected connection loss
-    -- Ensures the socket, receiver thread, and UI state are cleaned up properly
+    At each step:
+        1. Calls ns_client_take_socket() to atomically claim the socket and
+           clear joined, transport_connected, and user_id.
+        2. Optionally sends a LEAVE packet via ns_client_send_leave_if_needed().
+        3. Shuts down and closes the socket.
+        4. Joins the background receiver thread.
 
-    -- Acts as a helper function for shutting down the current server connection
-    -- Used when the client disconnects voluntarily, loses the connection, or shuts down
-
-    -- NsClientApp *app: The client application whose connection should be closed
-    -- gboolean notify_server: Whether the client should send a LEAVE packet before disconnecting
-
-    -- Declares gboolean was_joined = FALSE to track whether the client had joined the chat
-    -- Declares uint32_t user_id = 0U to store the current user ID
-    -- Calls ns_client_take_socket() to remove the socket from the client state & reset connection fields
-
-    -- Calls ns_client_send_leave_if_needed() to optionally notify the server
-    -- Calls ns_client_close_socket() to safely shut down and close the socket
-    -- Calls ns_client_join_receiver_thread() to wait for the background receive thread to finish
-    */
+    Args:
+        app:           Client application to disconnect.
+        notify_server: TRUE to send a LEAVE packet before closing.
+*/
 static void ns_client_disconnect(NsClientApp *app, gboolean notify_server) {
     gboolean was_joined = FALSE;
     uint32_t user_id = 0U;
@@ -481,31 +380,21 @@ static void ns_client_disconnect(NsClientApp *app, gboolean notify_server) {
     ns_client_join_receiver_thread(app);
 }
 
-/* static void ns_client_handle_packet -- Processes a single received packet
+/* ns_client_handle_packet - Process one received packet and queue the appropriate UI event.
 
-    -- Acts as a helper function for handling incoming packets from the server
-    -- Used inside the background receive loop to dispatch UI updates safely
+    At each step:
+        1. Switches on packet->header.type.
+        2. NS_PACKET_ACK: under connection_lock, marks app->joined and stores user_id,
+           then queues NS_UI_CONNECTED with the ACK body as the status text.
+        3. NS_PACKET_JOIN/TEXT/LEAVE: queues NS_UI_APPEND_LINE with packet->body.
+        4. NS_PACKET_ERROR: queues NS_UI_APPEND_LINE with a formatted error prefix,
+           then queues NS_UI_STATUS to update the status label separately.
+        5. default: queues NS_UI_APPEND_LINE with an "unknown packet" notice.
 
-    -- NsClientApp *app: The client application receiving the packet
-    -- NsPacket *packet: The packet received from the server
-
-    -- Declares line_buffer[NS_PACKET_BODY_MAX + 64] to format readable messages for the transcript
-
-    -- Switches on packet->header.type to determine handling:
-        -- NS_PACKET_ACK:
-            -- Locks app->connection_lock
-            -- Marks the client as joined and stores the server-assigned user ID
-            -- Unlocks the mutex
-            -- Queues an NS_UI_CONNECTED event with packet->body and sender ID
-        -- NS_PACKET_JOIN, NS_PACKET_TEXT, NS_PACKET_LEAVE:
-            -- Queues an NS_UI_APPEND_LINE event with packet->body and sender ID
-        -- NS_PACKET_ERROR:
-            -- Builds a formatted string "Server error: ..." in line_buffer
-            -- Queues NS_UI_APPEND_LINE with line_buffer
-            -- Queues NS_UI_STATUS with packet->body
-        -- default:
-            -- Queues NS_UI_APPEND_LINE indicating an unknown packet was received
-    */
+    Args:
+        app:    Client application receiving the packet.
+        packet: Packet received from the server.
+*/
 static void ns_client_handle_packet(NsClientApp *app, NsPacket *packet) {
     char line_buffer[NS_PACKET_BODY_MAX + 64U];
 
@@ -538,18 +427,14 @@ static void ns_client_handle_packet(NsClientApp *app, NsPacket *packet) {
     }
 }
 
-/* static ns_socket_t ns_client_get_socket_copy -- Safely copies the current client socket
+/* ns_client_get_socket_copy - Safely read the current socket under connection_lock.
 
-    -- Acts as a helper function for safely accessing the socket from another thread
-    -- Used by the receive loop to avoid directly using the shared socket while holding the mutex
+    Args:
+        app: Client application containing the shared socket.
 
-    -- NsClientApp *app: The client application containing the socket
-
-    -- Locks app->connection_lock
-    -- Copies app->socket_fd into a local variable
-    -- Unlocks the mutex
-    -- Returns the copied socket descriptor
-    */
+    Returns:
+        ns_socket_t: A snapshot of app->socket_fd at the time of the call.
+*/
 static ns_socket_t ns_client_get_socket_copy(NsClientApp *app) {
     ns_socket_t socket_fd;
 
@@ -560,30 +445,26 @@ static ns_socket_t ns_client_get_socket_copy(NsClientApp *app) {
     return socket_fd;
 }
 
-/* static gpointer ns_client_receive_loop -- Runs the background loop that receives packets
+/* ns_client_receive_loop - Background thread that reads packets from the server.
 
-    -- Acts as a helper function for continuously reading packets from the server
-    -- Used in a dedicated thread so incoming messages can be processed without blocking the GTK UI
+    Runs until the socket closes or ns_recv_packet returns an error. After
+    the loop exits, takes and closes the socket (if the main thread has not
+    already done so) and queues NS_UI_DISCONNECTED to restore the login UI.
 
-    -- gpointer data: Pointer to the NsClientApp structure for the running client
+    At each step:
+        1. Reads a snapshot of the current socket under connection_lock.
+        2. Loops calling ns_recv_packet(); breaks on receive_status <= 0.
+        3. On each successful packet, calls ns_client_handle_packet().
+        4. After the loop, calls ns_client_take_socket() to claim any remaining socket.
+        5. Shuts down and closes the socket if it is still valid.
+        6. Queues NS_UI_DISCONNECTED with a "Disconnected from server." message.
 
-    -- Casts data to NsClientApp *app
-    -- Calls ns_client_get_socket_copy() to safely fetch the current socket
+    Args:
+        data: Pointer to NsClientApp.
 
-    -- Loops while the socket remains valid:
-        -- Declares NsPacket packet
-        -- Calls ns_recv_packet() to receive the next packet
-        -- If receive fails or returns 0, breaks the loop
-        -- Calls ns_client_handle_packet() to process the received packet
-
-    -- After loop exit:
-        -- Calls ns_client_take_socket() to remove the socket from the client state
-        -- If socket is valid:
-            -- Shuts down and closes the socket
-        -- Queues an NS_UI_DISCONNECTED event with "Disconnected from server."
-
-    -- Returns NULL when the background thread finishes
-    */
+    Returns:
+        gpointer: NULL when the thread finishes.
+*/
 static gpointer ns_client_receive_loop(gpointer data) {
     NsClientApp *app = (NsClientApp *) data;
     ns_socket_t socket_fd = ns_client_get_socket_copy(app);
@@ -610,48 +491,21 @@ static gpointer ns_client_receive_loop(gpointer data) {
     return NULL;
 }
 
-/* static void ns_client_on_send_clicked -- Handles the [Send] button click & transmits a chat message
+/* ns_client_on_send_clicked - GTK callback: send the current message entry text.
 
-    -- Acts as a GTK callback function for sending a message entered by the user
-    -- Used when the [Send] button is clicked on the chat page
+    At each step:
+        1. Reads message text from app->message_entry; returns if empty.
+        2. Reads socket_fd and joined under connection_lock.
+        3. Returns with a status error if the socket is invalid or client is not joined.
+        4. Calls ns_packet_set() to build a TEXT packet; shows an error if the text is too long.
+        5. Calls ns_send_packet(); on failure, calls ns_client_disconnect() and restores the
+           login UI (the receiver thread will queue NS_UI_DISCONNECTED asynchronously).
+        6. Clears the message entry on success.
 
-    -- GtkButton *button: The GTK button that triggered the callback
-    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
-
-    -- Casts user_data to NsClientApp *app
-    -- Reads the current message text from app->message_entry
-    -- Declares NsPacket packet to store the outgoing TEXT packet
-    -- Declares ns_socket_t socket_fd = NS_INVALID_SOCKET to store the current socket
-    -- Declares gboolean joined = FALSE to track whether the client has joined the chat
-    -- Declares uint32_t user_id = 0U to store the current user ID
-
-    -- Casts button to void since it is otherwise not used
-
-    -- If message is NULL or empty, returns immediately
-    -- Locks app->connection_lock
-    -- Copies app->socket_fd, app->joined, and app->user_id into local variables
-    -- Unlocks app->connection_lock
-
-    -- If the socket is invalid or the client has not joined:
-        -- Updates the status label with an error
-        -- Returns immediately
-
-    -- Calls ns_packet_set() to build a TEXT packet
-        -- If packet creation fails:
-            -- Updates the status label with a message-length error
-            -- Returns immediately
-
-    -- Calls ns_send_packet() to send the packet
-        -- If sending fails:
-            -- Updates the status label with a send failure message
-            -- Calls ns_client_disconnect() without notifying the server
-            -- Disables the send button
-            -- Re-enables the login controls
-            -- Switches the UI back to the login page
-            -- Returns immediately
-
-    -- Clears the message entry after a successful send
-    */
+    Args:
+        button:    The Send button (unused beyond triggering the callback).
+        user_data: Pointer to NsClientApp.
+*/
 static void ns_client_on_send_clicked(GtkButton *button, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
     const char *message = gtk_editable_get_text(GTK_EDITABLE(app->message_entry));
@@ -694,30 +548,36 @@ static void ns_client_on_send_clicked(GtkButton *button, gpointer user_data) {
     gtk_editable_set_text(GTK_EDITABLE(app->message_entry), "");
 }
 
-/* static void ns_client_on_message_entry_activate -- Sends the current message when the message entry is activated
+/* ns_client_on_message_entry_activate - GTK callback: send the message when Enter is pressed.
 
-    -- Acts as a GTK callback function for the message entry's activate signal
-    -- Used when the user presses [Enter] in the message entry field
-    
-    -- GtkEntry *entry: The GTK entry widget that triggered the callback
-    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
+    Delegates to ns_client_on_send_clicked so the behavior is identical to
+    clicking the Send button.
 
-    -- Calls ns_client_on_send_clicked() to reuse the normal send-message logic
-    -- Casts entry to void since it is not otherwise used
-    */
+    Args:
+        entry:     The message GtkEntry (unused beyond triggering the callback).
+        user_data: Pointer to NsClientApp.
+*/
 static void ns_client_on_message_entry_activate(GtkEntry *entry, gpointer user_data) {
     ns_client_on_send_clicked(NULL, user_data);
     (void) entry;
 }
 
-/* static gboolean ns_client_validate_login -- Validates host, port, and username
+/* ns_client_validate_login - Validate host, port, and username before connecting.
 
-    -- NsClientApp *app: The client application
-    -- const char *host, *port, *username: User-entered login inputs
+    At each step:
+        1. Checks that host, port, and username are all non-NULL and non-empty.
+        2. Checks that username does not exceed NS_USERNAME_MAX characters.
+        3. Calls ns_client_set_status() with a descriptive message on failure.
 
-    -- Returns TRUE if all inputs are valid and username is <= NS_USERNAME_MAX
-    -- Returns FALSE and sets a status message if any input is invalid
-    */
+    Args:
+        app:      Client application whose status label receives error messages.
+        host:     Server hostname or IP string from the login form.
+        port:     Port number string from the login form.
+        username: Username string from the login form.
+
+    Returns:
+        gboolean: TRUE if all inputs are valid, FALSE otherwise.
+*/
 static gboolean ns_client_validate_login(NsClientApp *app, const char *host, const char *port, const char *username) {
     if(host == NULL || host[0] == '\0' ||
         port == NULL || port[0] == '\0' ||
@@ -734,13 +594,18 @@ static gboolean ns_client_validate_login(NsClientApp *app, const char *host, con
     return TRUE;
 }
 
-/* static int ns_client_build_join_packet -- Constructs a JOIN packet
+/* ns_client_build_join_packet - Construct a JOIN packet from the given username.
 
-    -- NsPacket *packet: The packet to populate
-    -- const char *username: Username for the join
-    -- ns_socket_t socket_fd: Socket to close if packet creation fails
+    Closes socket_fd and returns -1 if ns_packet_set fails, so the caller does
+    not need to handle the partial-connection state separately.
 
-    -- Returns 0 on success, -1 on failure
+    Args:
+        packet:    Packet structure to populate.
+        username:  Username to embed as the packet body.
+        socket_fd: Socket to close on failure.
+
+    Returns:
+        int: 0 on success, -1 if the username is too long for the packet body.
 */
 static int ns_client_build_join_packet(NsPacket *packet, const char *username, ns_socket_t socket_fd) {
     if(ns_packet_set(packet, NS_PACKET_JOIN, 0U, ns_unix_time_now(), username) != 0) {
@@ -750,14 +615,14 @@ static int ns_client_build_join_packet(NsPacket *packet, const char *username, n
     return 0;
 }
 
-/* static void ns_client_store_connection -- Safely stores connection state
+/* ns_client_store_connection - Store a new socket in shared state under connection_lock.
 
-    -- NsClientApp *app: The client application
-    -- ns_socket_t socket_fd: Connected socket
+    Sets socket_fd and transport_connected to TRUE; resets joined and user_id
+    so the client is in the "connected but not yet joined" state.
 
-    -- Locks app->connection_lock
-    -- Updates app->socket_fd, app->transport_connected, app->joined, app->user_id
-    -- Unlocks app->connection_lock
+    Args:
+        app:       Client application to update.
+        socket_fd: Newly connected socket to store.
 */
 static void ns_client_store_connection(NsClientApp *app, ns_socket_t socket_fd) {
     g_mutex_lock(&app->connection_lock);
@@ -768,19 +633,21 @@ static void ns_client_store_connection(NsClientApp *app, ns_socket_t socket_fd) 
     g_mutex_unlock(&app->connection_lock);
 }
 
-/* static void ns_client_on_connect_clicked -- Handles the [Connect] button click & begins the join flow
+/* ns_client_on_connect_clicked - GTK callback: begin the server connection and join flow.
 
-    -- Acts as a GTK callback for connecting the client to the server
-    -- GtkButton *button: The button triggering the callback
-    -- gpointer user_data: Pointer to NsClientApp
+    At each step:
+        1. Reads host, port, and username from the login form entries.
+        2. Validates inputs with ns_client_validate_login(); returns on failure.
+        3. Calls ns_connect_tcp(); shows the error string on failure.
+        4. Builds a JOIN packet via ns_client_build_join_packet().
+        5. Stores the socket with ns_client_store_connection().
+        6. Updates the UI: disables login controls, disables send, shows "Connecting...".
+        7. Sends the JOIN packet; on failure disconnects and re-enables the login form.
+        8. Starts the background receiver thread with g_thread_new().
 
-    -- Step 1: validate login inputs with ns_client_validate_login()
-    -- Step 2: connect to the server with ns_connect_tcp()
-    -- Step 3: build JOIN packet with ns_client_build_join_packet()
-    -- Step 4: store connection state with ns_client_store_connection()
-    -- Step 5: update UI: disable login controls, disable send button, status "Connecting..."
-    -- Step 6: send JOIN packet; handle send failure by disconnecting and re-enabling login
-    -- Step 7: start background receiver thread with g_thread_new()
+    Args:
+        button:    The Connect button (unused beyond triggering the callback).
+        user_data: Pointer to NsClientApp.
 */
 static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
@@ -828,19 +695,18 @@ static void ns_client_on_connect_clicked(GtkButton *button, gpointer user_data) 
     g_mutex_unlock(&app->connection_lock);
 }
 
-/* static gboolean ns_client_on_close_request -- Handles the window close request by disconnecting the client 
+/* ns_client_on_close_request - GTK callback: disconnect gracefully when the window closes.
 
-    -- Acts as a GTK callback function for the window close-request signal
-    -- Used when the user closes the application window
+    Sends a LEAVE packet before tearing down the connection so the server
+    can broadcast a leave notice to remaining clients.
 
-    -- GtkWindow *window: The GTK window that triggered the callback
-    -- gpointer user_data: Pointer to the NsClientApp structure for running the client
+    Args:
+        window:    The main GtkWindow (unused beyond triggering the callback).
+        user_data: Pointer to NsClientApp.
 
-    -- Casts user_data to NsClientApp *app
-    -- Casts window to void since it is not otherwise used
-    -- Calls ns_client_disconnect() & requests that the server be notified
-    -- Returns FALSE so that GTK continues with the normal window close behavior
-    */
+    Returns:
+        gboolean: FALSE so GTK continues with the normal window close behavior.
+*/
 static gboolean ns_client_on_close_request(GtkWindow *window, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -850,25 +716,18 @@ static gboolean ns_client_on_close_request(GtkWindow *window, gpointer user_data
     return FALSE;
 }
 
-/* static void ns_client_apply_css -- Loads & applies the client CSS stylesheet
+/* ns_client_apply_css - Load and apply the client stylesheet to the GTK display.
 
-    -- Acts as a helper function for applying custom visual styling to the GTK application
-    -- Used during client startup so that the UI uses the project's stylesheet
+    At each step:
+        1. Creates a GtkCssProvider and gets the default GdkDisplay.
+        2. Returns immediately if the display is NULL or app->asset_dir is NULL.
+        3. Builds the stylesheet path with ns_client_build_asset_path().
+        4. Loads the CSS file and adds the provider at APPLICATION priority.
+        5. Frees the path and releases the provider.
 
-    -- NsClientApp *app: The client application containing the resolved assets directory
-    -- Declares GtkCssProvider *provider to load the CSS file
-    -- Declares GdkDisplay *display to access the current display
-    -- Declares char *css_path to store the full path to the stylesheet
-
-    -- If display is NULL:
-        -- Release the CSS provider & returns immediately
-
-    -- Calls ns_client_build_asset_path() to construct the full stylesheet path
-    -- Calls gtk_css_provider_load_from_path() to load the stylesheet from the packaged assets directory
-    -- Calls gtk_style_context_add_provider_for_display() to apply the stylesheet to the display
-    -- Releases css_path with g_free()
-    -- Releases the CSS provider with g_object_unref()
-    */
+    Args:
+        app: Client application containing the resolved asset directory.
+*/
 static void ns_client_apply_css(NsClientApp *app) {
     char *css_path = NULL;
     GtkCssProvider *provider = gtk_css_provider_new();
@@ -891,47 +750,25 @@ static void ns_client_apply_css(NsClientApp *app) {
     g_object_unref(provider);
 }
 
-/* static int ns_client_load_ui -- Loads the GTK UI from the builder file & initializes widget references
+/* ns_client_load_ui - Load the GTK UI from client.ui and initialize widget references.
 
-    -- Acts as a helper function for constructing the client interface from client.ui
-    -- Used during client startup before the application window is shown
+    At each step:
+        1. Builds the UI file path with ns_client_build_asset_path().
+        2. Calls gtk_builder_add_from_file(); prints the GError and returns -1 on failure.
+        3. Retrieves all required widget pointers from the builder by ID.
+        4. Returns -1 if any required widget lookup returns NULL.
+        5. Gets the transcript buffer, creates the bold username_tag.
+        6. Associates the window with the GTK application.
+        7. Shows the login page, disables the send button, sets the initial status.
+        8. Connects GTK signals: connect button, send button, message entry activate,
+           and window close-request.
 
-    -- NsClientApp *app: The client application structure that will receive the loaded widget references
+    Args:
+        app: Client application structure that will receive the widget pointers.
 
-    -- Declares GtkBuilder *builder to load the UI definition
-    -- Declares char *ui_path to store the full path to client.ui
-    -- Calls ns_client_build_asset_path() to build the full UI file path
-    -- Calls gtk_builder_add_from_file() to load client.ui from the packaged assets directory
-
-    -- Retrieves and stores pointers to:
-        -- The main window
-        -- The stack
-        -- The login page
-        -- The chat page
-        -- The server, port, username, and message entries
-        -- The connect and send buttons
-        -- The status label
-        -- The transcript view
-
-    -- If any required widget lookup fails:
-        -- Releases the builder
-        -- Returns -1
-    
-    -- Retrieves the transcript buffer from the transcript view
-    -- Associates the window with the GTK application
-    -- Shows the login page in the stack
-    -- Disables the send button initially
-    -- Sets the initial status message
-
-    -- Connects GTK signals for:
-        -- The connect button click
-        -- The send button click
-        -- The message entry activate event
-        -- The window close-request event
-    
-    -- Releases the builder
-    -- Returns 0 upon success
-    */
+    Returns:
+        int: 0 on success, -1 if the UI file cannot be loaded or a widget is missing.
+*/
 static int ns_client_load_ui(NsClientApp *app) {
     char *ui_path = NULL;
     GError *error = NULL;
@@ -976,8 +813,7 @@ static int ns_client_load_ui(NsClientApp *app) {
     gtk_window_set_application(app->window, app->application);
     gtk_stack_set_visible_child(app->stack, app->login_page);
     gtk_widget_set_sensitive(GTK_WIDGET(app->send_button), FALSE);
-    // ns_client_set_status(app, "Enter a server and username to connect.");
-    ns_client_set_status(app, "");
+    ns_client_set_status(app, "Enter a server and username to connect.");
 
     g_signal_connect(app->connect_button, "clicked", G_CALLBACK(ns_client_on_connect_clicked), app);
     g_signal_connect(app->send_button, "clicked", G_CALLBACK(ns_client_on_send_clicked), app);
@@ -988,31 +824,19 @@ static int ns_client_load_ui(NsClientApp *app) {
     return 0;
 }
 
-/* static void ns_client_on_activate -- Handles GTK application activation & shows the main client window 
+/* ns_client_on_activate - GTK callback: build and show the main window on first activation.
 
-    -- Acts as a GTK callback function for the application's activate signal
-    -- Used when the client application starts or is activated again
+    At each step:
+        1. If app->window is already set, calls gtk_window_present() and returns.
+        2. Stores the GtkApplication pointer in app->application.
+        3. Calls ns_client_apply_css() to apply the stylesheet.
+        4. Calls ns_client_load_ui() to build the widget tree; quits on failure.
+        5. Calls gtk_window_present() to show the main window.
 
-    -- GtkApplication *application: The GTK application instance being activated
-    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
-    
-    -- Casts user_data to NsClientApp *app
-
-    -- If app->window is already initialized:
-        -- Calls gtk_window_present() to bring the existing window to the front
-        -- Returns immediately
-    
-    -- Stores application in app->application
-    -- Calls ns_client_apply_css() to load & apply the client stylesheet
-
-    -- Calls ns_client_load_ui() to load the GTK UI
-    -- If UI loading fails:
-        -- Prints an error message to stderr
-        -- Calls g_application_quit() to shut down the application
-        -- Returns immediately
-    
-    -- Calls gtk_window_present() to show the main window
-    */
+    Args:
+        application: The GtkApplication being activated.
+        user_data:   Pointer to NsClientApp.
+*/
 static void ns_client_on_activate(GtkApplication *application, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -1033,18 +857,12 @@ static void ns_client_on_activate(GtkApplication *application, gpointer user_dat
     gtk_window_present(app->window);
 }
 
-/* static void ns_client_on_shutdown -- Handles GTK application shutdown by disconnecting the client
+/* ns_client_on_shutdown - GTK callback: disconnect gracefully on application shutdown.
 
-    -- Acts as a GTK callback function for the application's shutdown signal
-    -- Used when the client application is closing & must clean up the server connection
-
-    -- GApplication *application: The GTK application instance being shut down
-    -- gpointer user_data: Pointer to the NsClientApp structure for the running client
-
-    -- Casts user_data to NsClientApp *app
-    -- Casts application to void since it is not otherwise used
-    -- Calls ns_client_disconnect() & requests that the server be notified 
-    */
+    Args:
+        application: The GApplication being shut down (unused).
+        user_data:   Pointer to NsClientApp.
+*/
 static void ns_client_on_shutdown(GApplication *application, gpointer user_data) {
     NsClientApp *app = (NsClientApp *) user_data;
 
@@ -1052,34 +870,26 @@ static void ns_client_on_shutdown(GApplication *application, gpointer user_data)
     ns_client_disconnect(app, TRUE);
 }
 
-/* int ns_client_run -- Initializes & runs the NodeSignal client application
+/* ns_client_run - Allocate client state, create the GTK application, and run the event loop.
 
-    -- Acts as the main public entry point for starting the GTK client
-    -- Used to initialize client state, create the GTK application, connect lifestyle callbacks, and run the event loop
+    At each step:
+        1. Allocates NsClientApp on the heap via g_new0 (avoids stack overflow from
+           the mutex and large arrays inside the structure).
+        2. Sets socket_fd to NS_INVALID_SOCKET and initializes connection_lock.
+        3. Resolves the executable directory and builds the asset_dir path.
+        4. Creates a G_APPLICATION_NON_UNIQUE GtkApplication so multiple instances
+           can run concurrently for testing.
+        5. Connects the activate and shutdown signals.
+        6. Calls g_application_run() to enter the GTK event loop.
+        7. Frees the application object, asset_dir, clears the mutex, and frees app.
 
-    -- int argc: The number of CLI arguments passed to the program
-    -- int **argv: The array of CLI argument strings
+    Args:
+        argc: Argument count forwarded from main().
+        argv: Argument vector forwarded from main().
 
-    -- Declares GtkApplication *application = NULL to store the GTK application object
-    -- Declares NsClientApp app to store the client application's runtime state
-    -- Declares int status = 0 to store the final application exit status
-
-    -- Clears app with memset()
-    -- Sets app.socket_fd to NS_INVALID_SOCKET
-    -- Initializes app.connection_lock with g_mutex_init()
-
-    -- Calls gtk_application_new() to create the GTK application
-    -- Uses the application ID "com.nodesignal.messenger"
-    -- Uses G_APPLICATION_NON_UNIQUE so that multiple instances may run concurrently
-
-    -- Connects the application's activate signal to ns_client_on_activate()
-    -- Connects the application's shutdown singal to ns_client_on_shutdown()
-
-    -- Calls g_application_run() to start the GTK event loop & stores the return value in status
-    -- Releases the GTK application with g_object_unref()
-    -- Clears app.connection_lock with g_mutex_clear()
-    -- Returns status 
-    */
+    Returns:
+        int: Exit status from g_application_run().
+*/
 int ns_client_run(int argc, char **argv) {
     GtkApplication *application = NULL;
     NsClientApp *app = NULL;
@@ -1106,29 +916,21 @@ int ns_client_run(int argc, char **argv) {
     return status;
 }
 
+/* main - Initialize networking, run the client, clean up, and return the exit status.
 
-/* int main -- Entry point of the NodeSignal client program
+    At each step:
+        1. Calls ns_net_init(); prints an error and returns EXIT_FAILURE on failure.
+        2. Calls ns_client_run() to enter the GTK event loop.
+        3. Calls ns_net_cleanup() to release networking resources.
+        4. Returns the status from ns_client_run().
 
-    -- Acts as the program's starting point
-    -- Used to initialize networking, run the client application, clean up networking resources, and return the final exit status
+    Args:
+        argc: Number of command-line arguments.
+        argv: Argument strings.
 
-    -- int argc: The number of CLI arguments passed to the program
-    -- int **argv: The array of CLI argument strings
-
-    -- Declares int net_status to store the result of network initialization
-    -- Declares int app_status = 0 to store the exit status returned by ns_client_run()
-
-    -- Calls ns_net_init() to initialize the networking subsystem
-    -- If network initialization fails:
-        -- Prints an error message to stderr 
-        -- Returns EXIT_FAILURE
-    
-    -- Calls ns_client_run() to start the client application
-    -- Stores the returned exit status in app_status
-
-    -- Calls ns_net_cleanup() to clean up networking resources
-    -- Retuns app_status
-    */
+    Returns:
+        int: EXIT_SUCCESS or EXIT_FAILURE.
+*/
 int main(int argc, char **argv) {
     int net_status = ns_net_init();
     int app_status = 0;

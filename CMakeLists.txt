@@ -148,6 +148,27 @@ configure_file(client/style.css ${CMAKE_BINARY_DIR}/assets/style.css COPYONLY)
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/package-database)
 file(WRITE ${CMAKE_BINARY_DIR}/package-database/.keep "")
 
+# Unit tests (CTest).
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(nodesignal_tests
+        tests/test_main.c
+        tests/test_packet.c
+        tests/test_db.c
+    )
+    target_include_directories(nodesignal_tests
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/comm
+            ${CMAKE_CURRENT_SOURCE_DIR}/database
+    )
+    target_link_libraries(nodesignal_tests
+        PRIVATE
+            nodesignal_comm
+            nodesignal_db
+    )
+    add_test(NAME nodesignal_unit_tests COMMAND nodesignal_tests)
+endif()
+
 if(WIN32)
     install(TARGETS nodesignal_server nodesignal_client
         RUNTIME_DEPENDENCY_SET nodesignal_runtime_deps

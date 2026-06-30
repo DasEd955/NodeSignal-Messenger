@@ -1,11 +1,18 @@
-/* ===================================================================================
-comm.c -- Implements the shared networking & packet protocol logic
-    -- Initializes & cleans up the networking subsystem
-    -- Provides cross-platform socket utilities
-    -- Connects to & listens for TCP connections
-    -- Builds, sends, and receives protocol packets
-    -- Converts networking errors into readable messages
-=================================================================================== */
+/* comm.c - Shared networking and packet protocol implementation.
+
+Provides cross-platform socket helpers, TCP connect/listen factories, and
+the binary wire protocol used between NodeSignal clients and servers. All
+multi-byte header fields are transmitted in big-endian (network) byte order.
+The in-memory NsPacketHeader struct is NOT layout-compatible with the wire
+bytes; ns_send_packet and ns_recv_packet serialize every field individually.
+
+Wire header layout (14 bytes, tightly packed):
+  [0]      version   -- must equal NS_PROTOCOL_VERSION; receiver rejects mismatches
+  [1]      type      -- NsPacketType enum value
+  [2..5]   sender_id -- big-endian uint32
+  [6..9]   timestamp -- big-endian uint32 Unix seconds
+  [10..13] body_len  -- big-endian uint32, <= NS_PACKET_BODY_MAX
+*/
 
 #include "comm.h"
 
@@ -20,72 +27,33 @@ comm.c -- Implements the shared networking & packet protocol logic
 #include <fcntl.h>
 #endif
 
-/* Wire header layout (14 bytes, tight):
- *   [0]     version   (1 byte)
- *   [1]     type      (1 byte)
- *   [2..5]  sender_id (big-endian u32)
- *   [6..9]  timestamp (big-endian u32)
- *   [10..13] body_len (big-endian u32)
- */
-#define NS_PACKET_HEADER_SIZE 14U
-
-/* static void ns_store_u32 -- Stores a 32-bit unsigned integer into a byte buffer in network byte order
-
-    -- Acts as a helper function for serializing 32-bit values into packet headers
-    -- Used when preparing packet header fields before sending data across the network
-
-    -- unsigned char *buffer: The byte buffer where the converted value will be stored
-    -- uint32_t value: The 32-bit unsigned integer value to store
-
-    -- Declares uint32_t network_value to hold the converted network byte order value
-    -- Calls htonl() to convert value from host byte order to network byte order
-    -- Calls memcpy() to copy the converted value into the destination buffer
-    */
+/* ns_store_u32 - Write a uint32 into buf in network (big-endian) byte order.
+   Used when serializing packet header fields before transmission. */
 static void ns_store_u32(unsigned char *buffer, uint32_t value) {
     uint32_t network_value = htonl(value);
     memcpy(buffer, &network_value, sizeof(network_value));
 }
 
-/* static uint32_t ns_load_u32 -- Loads a 32-bit unsigned integer from a byte buffer & converts it to host byte order
-
-    -- Acts as a helper function for deserializing 32-bit values from packet headers
-    -- Used when reading packet header fields received from the network
-
-    -- const unsigned char *buffer: The byte buffer containing the serialized 32-bit value
-
-    -- Declares uint32_t network_value = 0 to store the raw value copied from the buffer
-    -- Calls memcpy() to copy the 32-bit value from the buffer into network_value
-    -- Calls ntohl() to convert the value from network byte order to host byte order
-    -- Returns the converted 32-bit value
-    */
+/* ns_load_u32 - Read a big-endian uint32 from buf and return it in host order.
+   Used when deserializing packet header fields after reception. */
 static uint32_t ns_load_u32(const unsigned char *buffer) {
     uint32_t network_value = 0;
     memcpy(&network_value, buffer, sizeof(network_value));
     return ntohl(network_value);
 }
 
-/* static int ns_send_all -- Sends all bytes from a buffer over a socket connection
+/* ns_send_all - Reliably transmit exactly buffer_size bytes over socket_fd.
 
-    -- Acts as a helper function for reliably sending an entire block of data
-    -- Used when packet headers or packet bodies must be fully transmitted across the network
+    Loops over send() until every byte is delivered, retrying on short writes.
 
-    -- ns_socket_t socket_fd: The socket used to send the data
-    -- const unsigned char *buffer: The byte buffer containing the data to send
-    -- size_t buffer_size: The total number of bytes that must be sent
+    Args:
+        socket_fd:   Connected socket to write to.
+        buffer:      Bytes to transmit.
+        buffer_size: Exact number of bytes to send.
 
-    -- Declares size_t total_sent = 0 to track how many bytes have already been sent
-
-    -- Loops while total_send is less than buffer_size
-    -- Calls send() to transmit the remaining unsent bytes
-        -- On Windows, uses int sent_now
-        -- On Unix/Linux, uses ssize_t sent_now
-    -- If send() returns 0 or a negative value:
-        -- Returns -1 to indicate failure
-    -- Otherwise:
-        -- Adds the number of bytes sent to total_sent
-    
-    -- Returns 0 after all bytes in the buffer have been sent successfully
-    */
+    Returns:
+        int: 0 on success, -1 if the socket reports an error or closes mid-send.
+*/
 static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_t buffer_size) {
     size_t total_sent = 0;
 
@@ -104,33 +72,21 @@ static int ns_send_all(ns_socket_t socket_fd, const unsigned char *buffer, size_
     return 0;
 }
 
-/* static int ns_recv_all -- Receives an exact number of bytes from a socket connection 
+/* ns_recv_all - Reliably receive exactly buffer_size bytes from socket_fd.
 
-    -- Acts as a helper function for reliably reading a complete block of data
-    -- Used when packet headers or packet bodies must be fully received from the network
+    Loops over recv() until the full byte count arrives. Returns 0 (not -1)
+    when the peer closes the connection before any bytes were read, to
+    distinguish a clean EOF from a mid-message disconnect.
 
-    -- ns_socket_t socket_fd: The socket used to receive the data
-    -- unsigned char *buffer: The byte buffer where the received data will be stored
-    -- size_t buffer_size: The exact number of bytes that must be received 
+    Args:
+        socket_fd:   Connected socket to read from.
+        buffer:      Destination buffer; must be at least buffer_size bytes.
+        buffer_size: Exact number of bytes to receive.
 
-    -- Declares size_t total_received to track how many bytes have already been received
-
-    -- Loops while total_received is less than buffer_size
-    -- Calls recv() to read the remaining bytes
-        -- On Windows, uses int received_now
-        -- On Unix/Linux, uses ssize_t received_now
-    
-    -- If recv() returns 0:
-        -- Returns 0 if no bytes were received at all, meaning the connection was closed cleanly
-        -- Returns -1 if only part of the requested data was received before the connection closed
-
-    -- If recv() returns a negative value:
-        -- Returns -1 to indicate failure
-    -- Otherwise:
-        -- Add the number of bytes received to total_received
-    
-    -- Returns 1 after the full requested number of bytes has been received successfully
-    */
+    Returns:
+        int: 1 on success, 0 on clean EOF before the first byte, -1 on error
+        or partial disconnect mid-message.
+*/
 static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buffer_size) {
     size_t total_received = 0;
 
@@ -152,20 +108,14 @@ static int ns_recv_all(ns_socket_t socket_fd, unsigned char *buffer, size_t buff
     return 1;
 }
 
-/* int ns_net_init -- Initializes the network subsystem for the program
+/* ns_net_init - Initialize the OS networking subsystem.
 
-    -- Acts as a public communication function for preparing the network layer beforer socket operations
-    -- Used before creating, listening on, or sending data through sockets
+    On Windows, calls WSAStartup to prepare Winsock before any socket
+    operations. On POSIX, no setup is required.
 
-    -- On Windows:
-        -- Declares WSADATA data to store Windock initialization data
-        -- Calls WSAStartup() with version 2.2 to initialize Winsock
-        -- Returns the result of WSAStartup()
-    
-    -- On Unix/Linux:
-        -- No specialize network initialization is required
-        -- Returns 0
-    */
+    Returns:
+        int: 0 on success, non-zero on failure (Windows WSAStartup error code).
+*/
 int ns_net_init(void) {
 #ifdef _WIN32
     WSADATA data;
@@ -175,39 +125,17 @@ int ns_net_init(void) {
 #endif
 }
 
-/* void ns_net_cleanup -- Cleans up the networking subsystem before program exit
+/* ns_net_cleanup - Release OS networking resources before program exit.
 
-    -- Acts as a public communication function for releasing networking resources
-    -- Used after the program is finished performing socket operations
-
-    -- On Windows:
-        -- Calls WSACleanup() to clean up Winsock resources
-    
-    -- On Unix/Linux:
-        -- No special network cleanup is required
-    */
+    On Windows, calls WSACleanup. On POSIX, no-op.
+*/
 void ns_net_cleanup(void) {
 #ifdef _WIN32
     WSACleanup();
 #endif
 }
 
-/* void ns_socket_close -- Closes a socket if it is valid
-
-    -- Acts as a public communication function for safely closing a socket
-    -- Used when the program is finished using a socket connection
-
-    -- ns_socket_t socket_fd: The socket to close
-
-    -- If ns_socket_is_valid() reports that the socket is invalid:
-        -- Returns immediately
-    
-    -- On Windows:
-        -- Calls closesocket() to close the socket
-    
-    -- On Unix/Linux:
-        -- Calls close() system call to close the socket
-    */
+/* ns_socket_close - Close socket_fd if it is valid; otherwise do nothing. */
 void ns_socket_close(ns_socket_t socket_fd) {
     if(!ns_socket_is_valid(socket_fd)) {
         return;
@@ -220,24 +148,17 @@ void ns_socket_close(ns_socket_t socket_fd) {
 #endif
 }
 
-/* int ns_socket_shutdown -- Shuts down communication on a socket if it is valid
+/* ns_socket_shutdown - Disable both send and receive directions on socket_fd.
 
-    -- Acts as a public communication function for stopping sends & receives on a socket
-    -- Used before closing a socket connection or when the program wants to terminate communication cleanly
+    Signals the peer that no more data will be sent or received before the
+    socket descriptor is released.
 
-    -- ns_socket_t socket_fd: The socket to shut down
+    Args:
+        socket_fd: Socket to shut down.
 
-    -- If ns_socket_is_valid() reports that the socket is invalid:
-        -- Returns 0 immediately
-    
-    -- On Windows:
-        -- Calls shutdown() with SD_BOTH to disable both sending & receiving 
-        -- Returns the result of shutdown()
-
-    -- On Unix/Linux:
-        -- Calls shutdown with SHUT_RDWR to disable both sending & receiving 
-        -- Returns the result of shutdown()
-    */
+    Returns:
+        int: 0 if the socket was invalid (no-op), otherwise the result of shutdown().
+*/
 int ns_socket_shutdown(ns_socket_t socket_fd) {
     if(!ns_socket_is_valid(socket_fd)) {
         return 0;
@@ -250,33 +171,19 @@ int ns_socket_shutdown(ns_socket_t socket_fd) {
 #endif
 }
 
-/* int ns_socket_is_valid -- Checks whether a socket handle is invalid
-
-    -- Acts as a public communication function for validating socket handles
-    -- Used before performing operations such as send, receive, shutdown, or close
-    
-    -- ns_socket_t socket_fd: The socket handle being checked
-
-    -- Compares socket_fd against NS_INVALID_SOCKET
-        -- Returns nonzero if the socket is valid
-        -- Returns zero if the socket is invalid
-    */
+/* ns_socket_is_valid - Return non-zero if socket_fd is a usable socket handle. */
 int ns_socket_is_valid(ns_socket_t socket_fd) {
     return socket_fd != NS_INVALID_SOCKET;
 }
 
-/* uint32_t ns_unix_time_now -- Returns the current Unix timestamp
+/* ns_unix_time_now - Return the current Unix timestamp as a uint32.
 
-    -- Acts as a public communication utility function for retrieving the current time
-    -- Used when packet timestamps or database timestamps are needed
+    The uint32 wire field is a known Year-2038 limitation, documented in the
+    threat model. Returns 0 if the system clock reports an error.
 
-    -- Declares time_t now & stores the result of time(NULL)
-    -- If time(NULL) returns a negative value:
-        -- Returns 0U
-    -- Otherwise:
-        -- Casts the current time to uint32_t
-        -- Returns the Unix timestamp in seconds
-    */
+    Returns:
+        uint32_t: Seconds since the Unix epoch, truncated to 32 bits.
+*/
 uint32_t ns_unix_time_now(void) {
     time_t now = time(NULL);
     if(now < 0) {
@@ -285,26 +192,26 @@ uint32_t ns_unix_time_now(void) {
     return (uint32_t) now;
 }
 
-/* int ns_get_executable_dir -- Retrieves the directory containing the current executable
+/* ns_get_executable_dir - Write the directory containing the running executable into buffer.
 
-    -- Acts as a public communication utility function for locating runtime files relative to the program
-    -- Used by the client and server when they need to load assets or database files from an installed package
+    Used to locate assets and the database at a path relative to the binary,
+    independent of the process working directory. On Windows uses
+    GetModuleFileNameA; on Linux uses /proc/self/exe (Linux-only limitation
+    documented in the threat model). Falls back to "." on failure.
 
-    -- char *buffer: The character buffer where the executable directory will be written
-    -- size_t buffer_size: The size of buffer in bytes
+    At each step:
+        1. Returns -1 immediately if buffer is NULL or buffer_size is 0.
+        2. Reads the executable path via platform-specific API.
+        3. Scans backward for the last path separator and truncates there.
+        4. Falls back to "." if no separator is found.
 
-    -- If buffer is NULL or buffer_size is 0:
-        -- Returns -1
+    Args:
+        buffer:      Destination for the null-terminated directory path.
+        buffer_size: Size of buffer in bytes.
 
-    -- On Windows:
-        -- Calls GetModuleFileNameA() to retrieve the full executable path
-    -- On Unix/Linux:
-        -- Calls readlink() on /proc/self/exe to retrieve the full executable path
-
-    -- Finds the last path separator in the executable path
-    -- Replaces that separator with a null terminator so buffer stores only the directory path
-    -- Returns 0 on success or -1 on failure
-    */
+    Returns:
+        int: 0 on success, -1 on failure (buffer is set to an empty string on failure).
+*/
 int ns_get_executable_dir(char *buffer, size_t buffer_size) {
     size_t index = 0;
 
@@ -342,31 +249,18 @@ int ns_get_executable_dir(char *buffer, size_t buffer_size) {
     return 0;
 }
 
-/* const char *ns_last_error_string -- Retrieves the most recent system or socket error message as readable text
+/* ns_last_error_string - Retrieve the most recent socket or system error as text.
 
-    -- Acts as a public communication utility function for converting the latest error into a readable string
-    -- Used when the program needs to report networking or system errors to the console or user
+    On Windows, formats the WSAGetLastError code via FormatMessageA.
+    On POSIX, uses strerror(errno).
 
-    -- char *buffer: The character buffer where the error message will be written
-    -- size_t buffer_size: The size of the buffer in bytes
+    Args:
+        buffer:      Destination for the null-terminated error string.
+        buffer_size: Size of buffer in bytes.
 
-    -- If the buffer is NULL or buffer_size is 0:
-        -- Returns an empty string
-    
-    -- On Windows:
-        -- Declares DWORD error_code to store the result of WSAGetLastError()
-        -- Declares DWORD copied to store the number of characters written by FormatMessageA()
-        -- Calls WSAGetLastError() to get the latest Winsock error code 
-        -- Calls FormatMessageA() to convert that error code into a readable message in buffer
-        -- If FormatMessageA() fails:
-            -- Uses snprintf() to write a fallback error message into buffer
-    
-    -- On Unix/Linux:
-        -- Calls strerror(errno) to get the latest system error string
-        -- Uses snprintf() to copy that error string into buffer
-    
-    -- Returns buffer
-    */
+    Returns:
+        const char*: buffer, or an empty string literal if buffer is NULL or empty.
+*/
 const char *ns_last_error_string(char *buffer, size_t buffer_size) {
     if(buffer == NULL || buffer_size == 0) {
         return "";
@@ -375,7 +269,7 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
 #ifdef _WIN32
     DWORD error_code = WSAGetLastError();
     DWORD copied = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, error_code,
-                                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, (DWORD) buffer_size, NULL);                              
+                                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), buffer, (DWORD) buffer_size, NULL);
     if(copied == 0) {
         snprintf(buffer, buffer_size, "winsock error %lu", (unsigned long) error_code);
     }
@@ -386,31 +280,19 @@ const char *ns_last_error_string(char *buffer, size_t buffer_size) {
     return buffer;
 }
 
-/* static ns_socket_t ns_try_connect_addrinfo -- Attempts to connect to the first valid address from a getaddrinfo() result list
+/* ns_try_connect_addrinfo - Attempt a TCP connection across each candidate address.
 
-    -- Acts as an internal helper function to simplify TCP connection logic
-    -- Used by ns_connect_tcp() to iterate through candidate addresses and establish a connection
+    At each step:
+        1. Iterates the getaddrinfo result list.
+        2. Creates a socket for each candidate; skips on failure.
+        3. Calls connect(); returns the socket immediately on success.
+        4. Closes the socket and resets it to NS_INVALID_SOCKET on connect failure.
 
-    -- struct addrinfo *results: Linked list of address candidates returned by getaddrinfo()
+    Args:
+        results: Linked list of address candidates from getaddrinfo().
 
-    -- Declares struct addrinfo *candidate to iterate through each address
-    -- Declares ns_socket_t socket_fd initialized to NS_INVALID_SOCKET
-
-    -- Loops through each candidate in results:
-        -- Calls socket() to create a socket using the candidate's parameters
-        -- If the socket is invalid:
-            -- Continues to the next candidate
-
-        -- Calls connect() with the candidate's address
-        -- If connect() succeeds:
-            -- Returns the connected socket immediately
-
-        -- If connect() fails:
-            -- Calls ns_socket_close() to close the socket
-            -- Resets socket_fd to NS_INVALID_SOCKET
-            -- Continues to the next candidate
-
-    -- Returns NS_INVALID_SOCKET if no connection attempt succeeds
+    Returns:
+        ns_socket_t: A connected socket on success, NS_INVALID_SOCKET if all fail.
 */
 static ns_socket_t ns_try_connect_addrinfo(struct addrinfo *results) {
     struct addrinfo *candidate = NULL;
@@ -433,47 +315,26 @@ static ns_socket_t ns_try_connect_addrinfo(struct addrinfo *results) {
     return NS_INVALID_SOCKET;
 }
 
-/* static ns_socket_t ns_try_bind_listen -- Attempts to bind and listen on the first valid address from a getaddrinfo() result list
+/* ns_try_bind_listen - Bind and listen on the first viable address from the list.
 
-    -- Acts as an internal helper function to simplify server socket setup logic
-    -- Used by ns_listen_tcp() to iterate through candidate addresses and create a listening socket
+    Enables SO_REUSEADDR on every candidate. IPv6 candidates additionally set
+    IPV6_V6ONLY=0 so one socket accepts both IPv4 and IPv6 connections
+    (dual-stack). This behavior applies on all platforms, not just Windows,
+    which is intentional for portability.
 
-    -- struct addrinfo *results: Linked list of address candidates returned by getaddrinfo()
-    -- int backlog: Maximum number of pending connections for listen()
+    At each step:
+        1. Iterates the getaddrinfo result list.
+        2. Creates a socket; skips on failure.
+        3. Sets SO_REUSEADDR; sets IPV6_V6ONLY=0 for IPv6 candidates.
+        4. Calls bind(); closes and skips on failure.
+        5. Calls listen(); returns the socket on success, closes and skips on failure.
 
-    -- Declares struct addrinfo *candidate to iterate through each address
-    -- Declares ns_socket_t listen_socket initialized to NS_INVALID_SOCKET
-    -- Declares int reuse = 1 to enable SO_REUSEADDR
+    Args:
+        results: Linked list of address candidates from getaddrinfo().
+        backlog: Maximum number of queued pending connections for listen().
 
-    -- Loops through each candidate in results:
-        -- Declares int dual_stack = 0 for IPv6 dual-stack configuration (Windows only)
-
-        -- Calls socket() to create a socket for the candidate
-        -- If the socket is invalid:
-            -- Continues to the next candidate
-
-        -- Calls setsockopt() with SO_REUSEADDR to allow address reuse
-
-        -- On Windows:
-            -- If candidate is AF_INET6:
-                -- Disables IPV6_V6ONLY to allow dual-stack (IPv4 + IPv6)
-
-        -- Calls bind() with the candidate address
-        -- If bind() fails:
-            -- Calls ns_socket_close()
-            -- Resets listen_socket to NS_INVALID_SOCKET
-            -- Continues to the next candidate
-
-        -- Calls listen() with the provided backlog
-        -- If listen() succeeds:
-            -- Returns the listening socket
-
-        -- If listen() fails:
-            -- Calls ns_socket_close()
-            -- Resets listen_socket to NS_INVALID_SOCKET
-            -- Continues to the next candidate
-
-    -- Returns NS_INVALID_SOCKET if no candidate successfully binds and listens
+    Returns:
+        ns_socket_t: A listening socket on success, NS_INVALID_SOCKET if all fail.
 */
 static ns_socket_t ns_try_bind_listen(struct addrinfo *results, int backlog) {
     struct addrinfo *candidate = NULL;
@@ -511,39 +372,24 @@ static ns_socket_t ns_try_bind_listen(struct addrinfo *results, int backlog) {
 
     return NS_INVALID_SOCKET;
 }
-/* ns_socket_t ns_connect_tcp -- Connects to a remote TCP server & returns the connected socket (refactored with helper)
 
-    -- Acts as a communication function for creating an outgoing TCP client connection
-    -- Uses ns_try_connect_addrinfo() to simplify candidate iteration & connection logic
+/* ns_connect_tcp - Resolve host:port and return a connected TCP socket.
 
-    -- const char *host: The hostname or IP address of the remote server
-    -- const char *port: The port number of the remote server
-    -- char *error_buffer: Buffer used to store a readable error message if the connection fails
-    -- size_t error_buffer_size: The size of the error_buffer in bytes
+    At each step:
+        1. Configures getaddrinfo hints for AF_UNSPEC TCP.
+        2. Calls getaddrinfo(); writes a readable error to error_buffer on failure.
+        3. Calls ns_try_connect_addrinfo() to attempt connection across candidates.
+        4. Writes ns_last_error_string() to error_buffer if no connection succeeds.
+        5. Frees the getaddrinfo result list.
 
-    -- Declares struct addrinfo hints to describe requested socket types
-    -- Declares struct addrinfo *results to store getaddrinfo() output
-    -- Declares ns_socket_t socket_fd to store the connected socket
-    -- Declares int status for getaddrinfo() result
+    Args:
+        host:              Hostname or IP address of the remote server.
+        port:              Port number as a decimal string (e.g., "5555").
+        error_buffer:      If non-NULL, receives a human-readable error on failure.
+        error_buffer_size: Size of error_buffer in bytes.
 
-    -- Clears hints with memset()
-    -- Configures hints for:
-        -- AF_UNSPEC (IPv4 or IPv6)
-        -- SOCK_STREAM (TCP)
-        -- IPPROTO_TCP
-
-    -- Calls getaddrinfo() to resolve host & port
-    -- If getaddrinfo() fails:
-        -- Writes readable error to error_buffer if valid
-        -- Returns NS_INVALID_SOCKET
-
-    -- Calls ns_try_connect_addrinfo() to attempt connection across all candidates
-
-    -- If no connection succeeds:
-        -- Calls ns_last_error_string() to populate error_buffer if valid
-
-    -- Calls freeaddrinfo() to release resources
-    -- Returns connected socket or NS_INVALID_SOCKET on failure
+    Returns:
+        ns_socket_t: A connected socket on success, NS_INVALID_SOCKET on failure.
 */
 ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
@@ -578,40 +424,23 @@ ns_socket_t ns_connect_tcp(const char *host, const char *port, char *error_buffe
     return socket_fd;
 }
 
-/* ns_socket_t ns_listen_tcp -- Creates a TCP listening socket on the given port (refactored with helper)
+/* ns_listen_tcp - Bind to port and return a TCP listening socket.
 
-    -- Acts as a public communication function for creating a server listening socket
-    -- Uses ns_try_bind_listen() to simplify bind/listen logic across candidates
+    At each step:
+        1. Configures getaddrinfo hints for AF_UNSPEC TCP with AI_PASSIVE.
+        2. Calls getaddrinfo() with a NULL host to bind to all interfaces.
+        3. Calls ns_try_bind_listen() to attempt bind and listen across candidates.
+        4. Writes ns_last_error_string() to error_buffer if no candidate succeeds.
+        5. Frees the getaddrinfo result list.
 
-    -- const char *port: The port number the server should listen on
-    -- int backlog: The max number of pending connection requests
-    -- char *error_buffer: Buffer used to store a readable error message if setup fails
-    -- size_t error_buffer_size: Size of error_buffer in bytes
+    Args:
+        port:              Port to listen on as a decimal string.
+        backlog:           Maximum pending connection queue length.
+        error_buffer:      If non-NULL, receives a human-readable error on failure.
+        error_buffer_size: Size of error_buffer in bytes.
 
-    -- Declares struct addrinfo hints for address resolution
-    -- Declares struct addrinfo *results for getaddrinfo() output
-    -- Declares ns_socket_t listen_socket for the resulting socket
-    -- Declares int status for getaddrinfo()
-
-    -- Clears hints with memset()
-    -- Configures hints for:
-        -- AF_UNSPEC (IPv4 or IPv6)
-        -- SOCK_STREAM (TCP)
-        -- IPPROTO_TCP
-        -- AI_PASSIVE (suitable for bind)
-
-    -- Calls getaddrinfo() with NULL host for local binding
-    -- If getaddrinfo() fails:
-        -- Writes readable error to error_buffer if valid
-        -- Returns NS_INVALID_SOCKET
-
-    -- Calls ns_try_bind_listen() to attempt bind + listen across candidates
-
-    -- If no candidate succeeds:
-        -- Calls ns_last_error_string() to populate error_buffer if valid
-
-    -- Calls freeaddrinfo() to release resources
-    -- Returns listening socket or NS_INVALID_SOCKET on failure
+    Returns:
+        ns_socket_t: A listening socket on success, NS_INVALID_SOCKET on failure.
 */
 ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, size_t error_buffer_size) {
     struct addrinfo hints;
@@ -647,36 +476,28 @@ ns_socket_t ns_listen_tcp(const char *port, int backlog, char *error_buffer, siz
     return listen_socket;
 }
 
-/* int ns_packet_set -- Initializes a packet with the given header value & body text
+/* ns_packet_set - Initialize an NsPacket with the given metadata and body text.
 
-    -- Acts as a public communication function for preparing a packet before it is sent across the network
-    -- Used to fill in packet header fields & safely copy the packet body text
+    Automatically sets header.version to NS_PROTOCOL_VERSION. Rejects bodies
+    longer than NS_PACKET_BODY_MAX so callers never need to pre-check length.
 
-    -- NsPacket *packet: The packet structure to initialize
-    -- uint8_t type: The packet type to store in the header
-    -- uint32_t sender_id: The sender ID to store in the header
-    -- uint32_t timestamp: The Unix timestamp to store in the header
-    -- const char *body: The packet body text to copy into the packet
-    
-    -- Declares size_t body_length = 0 to store the length of the body text
+    At each step:
+        1. Returns -1 if packet is NULL.
+        2. Measures body length; returns -1 if it exceeds NS_PACKET_BODY_MAX.
+        3. Zeroes the packet structure with memset.
+        4. Populates all header fields including version.
+        5. Copies the body and appends a null terminator.
 
-    -- If packet is NULL:
-        -- Returns -1
-    
-    -- If body is not NULL:
-        -- Calls strlen() to determine the body length
-        -- If body_length is greater than NS_PACKET_BODY_MAX:
-            -- Returns -1
-    
-    -- Clears the packet structure with memset()
-    -- Stores type, sender_id, timestamp, and body_length in the packet
+    Args:
+        packet:    Packet structure to populate; must not be NULL.
+        type:      NsPacketType value (JOIN, TEXT, LEAVE, ACK, or ERROR).
+        sender_id: Numeric user ID to embed in the header.
+        timestamp: Unix timestamp for the packet (use ns_unix_time_now()).
+        body:      Null-terminated body text; may be NULL for an empty body.
 
-    -- If body_length is greater than 0:
-        -- Calls memcpy() to copy the body text into packet->body
-    
-    -- Writes a null terminator at packet->body[body_length]
-    -- Returns 0 upon success
-    */
+    Returns:
+        int: 0 on success, -1 if packet is NULL or body exceeds NS_PACKET_BODY_MAX.
+*/
 int ns_packet_set(NsPacket *packet, uint8_t type, uint32_t sender_id, uint32_t timestamp, const char *body) {
     size_t body_length = 0;
 
@@ -705,37 +526,26 @@ int ns_packet_set(NsPacket *packet, uint8_t type, uint32_t sender_id, uint32_t t
     return 0;
 }
 
-/* int ns_send_packet -- Sends a complete packet over a socket connection 
+/* ns_send_packet - Serialize and transmit a complete packet over socket_fd.
 
-    -- Acts as a public communication function for transmitting a full protocol packet 
-    -- Used to send both the fixed-size packet header & the packet body across the network
+    Serializes the 14-byte header field-by-field in network byte order, then
+    sends the body. Two ns_send_all calls are made (header then body) so no
+    intermediate assembly buffer is needed for large bodies.
 
-    -- ns_socket_t socket_fd: The socket used to send the packet
-    -- const NsPacket *packet: The packet structure containing the header fields & body text to send
+    At each step:
+        1. Returns -1 if socket_fd is invalid, packet is NULL, or body_len is too large.
+        2. Zeroes and populates the 14-byte header buffer.
+        3. Calls ns_send_all() for the header; returns -1 on failure.
+        4. Returns 0 immediately if body_len is 0.
+        5. Calls ns_send_all() for the body and returns its result.
 
-    -- Declares unsigned char header_buffer[NS_PACKET_HEADER_SIZE] to store the serialized packet header
+    Args:
+        socket_fd: Connected socket to write to.
+        packet:    Packet to transmit; body_len must be <= NS_PACKET_BODY_MAX.
 
-    -- If ns_socket_is_valid() reports that socket_fd is invalid or packet is NULL:
-        -- Returns -1 
-    
-    -- If packet->header.body_len is greater than NS_PACKET_BODY_MAX:
-        -- Returns -1
-    
-    -- Clears header_buffer with memset()
-    -- Stores the packet type in header_buffer[0]
-    -- Calls ns_store_u32() to serialize sender_id, timestamp, and body_len into the header buffer
-
-    -- Calls ns_send_all() to send the fixed-size header buffer
-    -- If sending the header fails:
-        -- Returns -1
-    
-    -- If packet->header.body_len is 0:
-        -- Returns 0 since there is no body to send
-    
-    -- Otherwise:
-        -- Calls ns_send_all() to send the pcket body
-        -- Returns the result of sending the body
-    */
+    Returns:
+        int: 0 on success, -1 on invalid arguments or send failure.
+*/
 int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
 
@@ -764,42 +574,32 @@ int ns_send_packet(ns_socket_t socket_fd, const NsPacket *packet) {
     return ns_send_all(socket_fd, (const unsigned char *) packet->body, (size_t) packet->header.body_len);
 }
 
-/* int ns_recv_packet -- Receives a complete packet from a socket connection 
+/* ns_recv_packet - Read and validate a complete packet from socket_fd.
 
-    -- Acts as a public communication function for reading a full protocol packet from the network
-    -- Used to receive both the fixed-size packet header & the packet body from a socket
+    Reads the 14-byte wire header, validates the protocol version and packet
+    type before reading the body, then reads body_len bytes. Invalid bytes
+    (unknown version or type) are rejected at the protocol layer so they
+    never reach server business logic.
 
-    -- ns_socket_t socket_fd: The socket used to receive the packet
-    -- NsPacket *packet: The packet structure where the received header & body data will be stored
+    At each step:
+        1. Returns -1 if socket_fd is invalid or packet is NULL.
+        2. Reads the 14-byte header with ns_recv_all(); returns recv_status on failure.
+        3. Validates header.version against NS_PROTOCOL_VERSION; returns NS_RECV_ERROR on mismatch.
+        4. Validates header.type against all known NsPacketType values; returns NS_RECV_ERROR for unknowns.
+        5. Deserializes sender_id, timestamp, and body_len from the header buffer.
+        6. Returns -1 if body_len exceeds NS_PACKET_BODY_MAX.
+        7. Returns NS_RECV_OK immediately if body_len is 0.
+        8. Reads body_len bytes with ns_recv_all(); returns recv_status on failure.
+        9. Appends a null terminator and returns NS_RECV_OK.
 
-    -- Declares unsigned char header_buffer[NS_PACKET_HEADER_SIZE] to store the raw received header bytes
-    -- Declares int recv_status = 0 to store the result returned by ns_recv_all()
+    Args:
+        socket_fd: Connected socket to read from.
+        packet:    Destination structure; cleared before writing.
 
-    -- If ns_socket_is_valid() reports that socket_fd is invalid or packet is NULL:
-        -- Returns -1
-    
-    -- Calls ns_recv_all() to read the fixed-size packet header into header_buffer
-    -- If ns_recv_all() returns 0 or -1:
-        -- Returns recv_status immediately 
-    
-    -- Clears the packet structure with memset()
-    -- Reads the packet type from header_buffer[0]
-    -- Calls ns_load_u32() to deserialize sender_id, timestamp, and body_len from the header_buffer
-
-    -- If packet->header.body_len is greater than NS_PACKET_BODY_MAX:
-        -- Returns -1
-    
-    -- If packet->header.body_len is 0:
-        -- Stores the null terminator in packet->body[0]
-        -- Returns 1
-    
-    -- Calls ns_recv_all() to read the packet body into packet->body
-    -- If ns_recv_all() returns 0 or -1:
-        -- Returns recv_status immediately
-    
-    -- Writes a null terminator at the end of the received body text
-    -- Returns 1 upon success
-    */
+    Returns:
+        int: NS_RECV_OK (1) on success, NS_RECV_CLOSED (0) on clean EOF before
+        the header, NS_RECV_ERROR (-1) on protocol violation or receive error.
+*/
 int ns_recv_packet(ns_socket_t socket_fd, NsPacket *packet) {
     unsigned char header_buffer[NS_PACKET_HEADER_SIZE];
     int recv_status = 0;

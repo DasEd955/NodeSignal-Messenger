@@ -57,9 +57,10 @@ typedef socklen_t ns_socklen_t;
 extern "C" {
 #endif
 
-#define NS_PACKET_BODY_MAX 512U
-#define NS_USERNAME_MAX 32U
-#define NS_PROTOCOL_VERSION 1U
+#define NS_PACKET_BODY_MAX    512U
+#define NS_PACKET_HEADER_SIZE  14U
+#define NS_USERNAME_MAX        32U
+#define NS_PROTOCOL_VERSION     1U
 
 /* SECURITY NOTICE (threat model)
  *
