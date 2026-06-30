@@ -1,6 +1,6 @@
 # NodeSignal Messenger
 
-A multi-client TCP chat application written in C, built from the protocol layer up. The system consists of a `select()`/`poll()`-based socket server, a shared binary wire protocol, a SQLite persistence layer, and a GTK4 desktop client driven by a background receive thread. Every boundary between components is defined by a narrow, explicitly documented API, and the entire stack is covered by a 2,170-line test suite spanning unit, integration, and end-to-end scenarios.
+A multiclient TCP chat application written in C, built from the protocol layer up. The system consists of a `select()`/`poll()`-based socket server, a shared binary wire protocol, a SQLite persistence layer, and a GTK4 desktop client driven by a background receive thread. Every boundary between components is defined by a narrow, explicitly documented API, and the entire stack is covered by a 2,170 line test suite spanning unit, integration, and end-to-end scenarios.
 
 ## Table of Contents
 
@@ -123,7 +123,7 @@ packet-beta
 
 Every packet begins with a 14-byte fixed-length header. The `version` byte is checked against `NS_PROTOCOL_VERSION` (currently `1`) on receipt; a mismatch causes the receiver to close the connection immediately. The `type` byte carries one of five `NsPacketType` values that determines how the body is interpreted. `sender_id` is the SQLite `users.id` assigned at join time; the server populates this field when broadcasting messages to other clients. `timestamp` is a Unix epoch value in seconds (32-bit, truncates in 2038). `body_len` is validated against `NS_PACKET_BODY_MAX` (512) before any read is attempted, preventing overflows.
 
-The in-memory `NsPacketHeader` struct is explicitly not wire-compatible with the 14-byte layout because C struct padding is compiler-defined. `comm.c` serializes and deserializes every field individually using `ns_store_u32` / `ns_load_u32` helpers that perform explicit byte-by-byte big-endian packing.
+The in-memory `NsPacketHeader` struct is explicitly not wire compatible with the 14-byte layout because C struct padding is compiler defined. `comm.c` serializes and deserializes every field individually using `ns_store_u32` / `ns_load_u32` helpers that perform explicit byte-by-byte big-endian packing.
 
 ```mermaid
 sequenceDiagram
@@ -191,7 +191,7 @@ Defines the widget tree as a GTK Builder XML file loaded at runtime via `gtk_bui
 
 ### style.css
 
-Applied globally via `gtk_style_context_add_provider_for_display`. Implements a macOS-inspired visual style: white window background, iOS-blue (`#007aff`) buttons, light gray header bar (`#f5f5f7`), and rounded-corner entries and text views.
+Applied globally via `gtk_style_context_add_provider_for_display`. Implements a macOS inspired visual style: white window background, iOS blue (`#007aff`) buttons, light gray header bar (`#f5f5f7`), and rounded corner entries and text views.
 
 ---
 
@@ -244,7 +244,7 @@ typedef struct NsPacketHeader {
     uint8_t  type;       // NsPacketType
     uint32_t sender_id;  // users.id from SQLite
     uint32_t timestamp;  // Unix seconds (32-bit)
-    uint32_t body_len;   // bytes in body, 0..512
+    uint32_t body_len;   // Bytes in body, 0..512
 } NsPacketHeader;
 
 typedef struct NsPacket {
@@ -315,7 +315,7 @@ typedef struct NsPacket {
 
 | Constant | Value |
 |---|---|
-| `NS_MAX_CLIENTS` | 1024 |
+| `NS_MAX_CLIENTS` | 1024 clients |
 | `NS_SEND_BUF_SIZE` | 2048 bytes |
 | `NS_AUTH_TIMEOUT_SECS` | 10 seconds |
 
@@ -323,7 +323,7 @@ typedef struct NsPacket {
 
 ## 6. Database
 
-`database/` wraps SQLite behind a six-function API. All SQL is written as prepared statements compiled once at `ns_db_open` and reused for every subsequent call, which eliminates per-call parse overhead and removes parameterized injection surface.
+`database/` wraps SQLite behind a six function API. All SQL is written as prepared statements compiled once at `ns_db_open` and reused for every subsequent call, which eliminates per-call parse overhead and removes parameterized injection surface.
 
 ### Schema
 
@@ -392,13 +392,13 @@ const char  *ns_db_last_error(NsDatabase *db);
 
 `ns_db_get_or_create_user` runs `stmt_find_user` first; if the user does not exist it runs `stmt_insert_user` and calls `sqlite3_last_insert_rowid`. The `INSERT OR IGNORE` means a concurrent insert of the same username will silently succeed and the subsequent `SELECT` will return the existing row. `out_id` is written only on success.
 
-`ns_db_recent_messages` invokes the caller-supplied `NsMessageCallback` once per row in the result set, passing username, body, sent_at, and an opaque `userdata` pointer. This keeps the database layer independent of any display or formatting logic.
+`ns_db_recent_messages` invokes the caller supplied `NsMessageCallback` once per row in the result set, passing username, body, sent_at, and an opaque `userdata` pointer. This keeps the database layer independent of any display or formatting logic.
 
 ---
 
 ## 7. Spec Reflection
 
-The assignment asked for a multi-client server that accepts connections, routes messages, and persists activity. The implementation delivers all three, and the engineering choices along the way reflect a deliberate layering discipline.
+The assignment asked for a multiclient server that accepts connections, routes messages, and persists activity. The implementation delivers all three, and the engineering choices along the way reflect a deliberate layering discipline.
 
 The decision to isolate all wire protocol code inside `comm/` paid off during testing. Because `ns_recv_packet` and `ns_send_packet` operate on file descriptors, the test suite could open POSIX socket pairs in a single process and exercise the full serialization path without starting the server binary. Every packet type, every rejection path (bad version, body overflow, unknown type), and every zero-body edge case is covered at this level before the integration tests exercise the server dispatch logic.
 
@@ -462,13 +462,13 @@ Integration tests in `test_integration.c` spawn a server thread and connect a cl
 
 ## 9. Limitations
 
-NodeSignal Messenger is a course project scoped to demonstrate multi-client TCP communication, a shared binary protocol, and SQLite persistence in C. The following constraints are deliberate and documented.
+NodeSignal Messenger is a course project scoped to demonstrate multiclient TCP communication, a shared binary protocol, and SQLite persistence in C. The following constraints are deliberate and documented.
 
 **Security.** All packets are transmitted in cleartext over TCP. There is no TLS, no transport encryption, and no integrity check on packet contents. There is no authentication mechanism beyond username uniqueness within the running server session; any client can claim any username that is not already connected. The system should not be deployed on a public network or used to transmit sensitive information.
 
 **Authentication.** The join flow checks only that the requested username is not already active in the current server session. It does not verify identity, require a password, or issue a session token. A reconnecting client with the same username receives the same `users.id` from the database (because `INSERT OR IGNORE` preserves the existing row), but the server has no mechanism to prevent a different client from claiming that username if the original disconnects.
 
-**Protocol year-2038 issue.** The `timestamp` field in the packet header is a 32-bit unsigned Unix timestamp. This value will overflow in 2038. The database `sent_at` and `created_at` columns store the same value as SQLite `INTEGER`, which is a 64-bit signed integer and does not have this limitation; the overflow is confined to the wire protocol.
+**Protocol year 2038 issue.** The `timestamp` field in the packet header is a 32-bit unsigned Unix timestamp. This value will overflow in 2038. The database `sent_at` and `created_at` columns store the same value as SQLite `INTEGER`, which is a 64-bit signed integer and does not have this limitation; the overflow is confined to the wire protocol.
 
 **Single chat room.** All connected clients share one global broadcast channel. There is no concept of rooms, direct messages, or topics.
 
@@ -478,7 +478,7 @@ NodeSignal Messenger is a course project scoped to demonstrate multi-client TCP 
 
 **Packet body encoding.** The protocol treats the body as arbitrary bytes and documents it as UTF-8, but neither the server nor the client validates that incoming bodies are well-formed UTF-8. Malformed sequences are stored in the database and forwarded to other clients without sanitization.
 
-**No TLS / encryption.** Noted separately from the authentication limitation because it is a distinct gap: even if authentication were added, the credential exchange and all subsequent traffic would travel in plaintext without transport-layer security.
+**No TLS / encryption.** Noted separately from the authentication limitation because it is a distinct gap: even if authentication were added, the credential exchange and all subsequent traffic would travel in plaintext without transport layer security.
 
 ---
 
